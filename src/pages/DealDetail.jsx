@@ -73,8 +73,22 @@ export default function DealDetail() {
     );
   }
 
-  const participating = deal.skus.filter(s => s.participating);
-  const excluded = deal.skus.filter(s => !s.participating);
+  // If we have deal dashboard data, use those SKUs instead of hardcoded sample data
+  const effectiveSkus = useMemo(() => {
+    if (!hasDealDashboard) return deal.skus;
+    // Build SKU list from deal dashboard data, enriched with participation status
+    return dealDashboardForDeal.map(d => ({
+      sku: d.skuName,
+      asin: d.asin,
+      variant: d.skuName,
+      participating: d.participating,
+      strReflecting: true,
+      excludeReason: d.exclusionReason || '',
+    }));
+  }, [deal.skus, dealDashboardForDeal, hasDealDashboard]);
+
+  const participating = effectiveSkus.filter(s => s.participating);
+  const excluded = effectiveSkus.filter(s => !s.participating);
 
   const handleExclude = () => {
     if (excludeModal) {
@@ -106,8 +120,10 @@ export default function DealDetail() {
 
   // Build enriched SKU data by merging financials + deal dashboard data
   const enrichSku = (sku) => {
-    // Get product financials (COGS, FBA, Referral, etc.)
-    const fin = getSkuFinancials(sku.sku);
+    // Get product financials by SKU name first, then by ASIN
+    let fin = getSkuFinancials(sku.sku);
+    if (!fin) fin = financials.find(f => f.asin === sku.asin);
+    if (!fin) fin = financials.find(f => f.tag === deal.parent && sku.sku.toLowerCase().includes(f.sku?.toLowerCase()?.split('-').slice(-1)[0] || '___'));
     // Find matching deal dashboard entry by ASIN
     const dashEntry = dealDashboardForDeal.find(d => d.asin === sku.asin);
 
