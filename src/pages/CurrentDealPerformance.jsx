@@ -12,7 +12,7 @@ import {
 import { format, subDays, isWithinInterval, eachDayOfInterval } from 'date-fns';
 import {
   Package, Calendar, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight,
-  Layers, Grid3x3, Eye, Upload, Download, CheckCircle2, AlertCircle,
+  Layers, Grid3x3, Eye, Upload, Download, CheckCircle2, AlertCircle, Search,
 } from 'lucide-react';
 
 const LOOKBACK_OPTIONS = [
@@ -121,6 +121,8 @@ export default function CurrentDealPerformance() {
   const [selectedSku, setSelectedSku] = useState('');
   const [lookback, setLookback] = useState(30);
   const [startDate, setStartDate] = useState('2026-04-08');
+  const [tableView, setTableView] = useState('sku'); // 'parent' | 'sku'
+  const [keywordSearch, setKeywordSearch] = useState('');
 
   const prod = PRODUCTS[product];
 
@@ -621,15 +623,84 @@ export default function CurrentDealPerformance() {
       {currentDeal && skuTableData.length > 0 && (
         <div className="bg-white rounded-xl shadow-sm overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               <Grid3x3 size={18} className="text-blue-500" />
-              <h2 className="text-lg font-bold text-gray-800">SKU-Level Performance</h2>
+              <h2 className="text-lg font-bold text-gray-800">Performance</h2>
+              <div className="flex gap-1 ml-2">
+                <button
+                  onClick={() => setTableView('parent')}
+                  className={`px-3 py-1 rounded-lg text-xs font-medium cursor-pointer flex items-center gap-1 ${
+                    tableView === 'parent' ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  <Layers size={11} /> Parent
+                </button>
+                <button
+                  onClick={() => setTableView('sku')}
+                  className={`px-3 py-1 rounded-lg text-xs font-medium cursor-pointer flex items-center gap-1 ${
+                    tableView === 'sku' ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  <Grid3x3 size={11} /> SKU
+                </button>
+              </div>
             </div>
             <span className="text-xs text-gray-400">
               Baseline: L{lookback} days before deal start &middot; {parentSummary?.dealDays} deal days elapsed
             </span>
           </div>
 
+          {/* Parent-level aggregated view */}
+          {tableView === 'parent' && parentSummary && (
+            <div className="p-6">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+                <div className="bg-gray-50 rounded-lg p-4 text-center">
+                  <p className="text-xs text-gray-500 uppercase font-semibold">L{lookback} Avg/Day</p>
+                  <p className="text-xl font-bold text-gray-800 mt-1">{Math.round(baselineAvg)}</p>
+                </div>
+                <div className="bg-purple-50 rounded-lg p-4 text-center">
+                  <p className="text-xs text-gray-500 uppercase font-semibold">Avg Multiplier</p>
+                  <p className="text-xl font-bold text-purple-600 mt-1">{parentSummary.avgMultiplier.toFixed(1)}x</p>
+                </div>
+                <div className="bg-purple-50 rounded-lg p-4 text-center">
+                  <p className="text-xs text-gray-500 uppercase font-semibold">Projected Total</p>
+                  <p className="text-xl font-bold text-purple-600 mt-1">{parentSummary.totalProjected.toLocaleString()}</p>
+                </div>
+                <div className="rounded-lg p-4 text-center" style={{ backgroundColor: prod.color + '10' }}>
+                  <p className="text-xs text-gray-500 uppercase font-semibold">Actual Total</p>
+                  <p className="text-xl font-bold mt-1" style={{ color: prod.color }}>{parentSummary.totalActual.toLocaleString()}</p>
+                </div>
+                <div className={`rounded-lg p-4 text-center ${parentSummary.pctVsProjected >= 0 ? 'bg-green-50' : 'bg-red-50'}`}>
+                  <p className="text-xs text-gray-500 uppercase font-semibold">vs Projected</p>
+                  <div className="flex items-center justify-center gap-1 mt-1">
+                    {parentSummary.pctVsProjected >= 0 ? <TrendingUp size={16} className="text-green-600" /> : <TrendingDown size={16} className="text-red-500" />}
+                    <p className={`text-xl font-bold ${parentSummary.pctVsProjected >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                      {parentSummary.pctVsProjected >= 0 ? '+' : ''}{parentSummary.pctVsProjected.toFixed(1)}%
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h4 className="text-sm font-bold text-gray-700 mb-2">{prod.name} ({prod.shortName}) — Deal {currentDeal.id}</h4>
+                <div className="grid grid-cols-3 gap-4 text-sm">
+                  <div>
+                    <span className="text-gray-500">Deal Type:</span>
+                    <span className="ml-2 font-semibold">{DEAL_TYPES[currentDeal.type]?.name}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Duration:</span>
+                    <span className="ml-2 font-semibold">{parentSummary.dealDays} days elapsed</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">SKUs:</span>
+                    <span className="ml-2 font-semibold">{skuTableData.length}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {tableView === 'sku' && (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -691,9 +762,10 @@ export default function CurrentDealPerformance() {
               </tbody>
             </table>
           </div>
+          )}
 
           {/* Parent totals row */}
-          {parentSummary && (
+          {parentSummary && tableView === 'sku' && (
             <div className="px-4 py-3 border-t-2 border-gray-200 bg-gray-50 flex items-center gap-4">
               <span className="text-sm font-bold text-gray-700 w-64">TOTAL ({prod.shortName})</span>
               <div className="flex-1 flex items-center gap-8 text-sm">
@@ -724,6 +796,112 @@ export default function CurrentDealPerformance() {
               <strong>vs Projected</strong> = (Actual - Projected) / Projected &nbsp;|&nbsp;
               <strong>vs Baseline</strong> = (Actual Avg - L{lookback} Avg) / L{lookback} Avg
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Keyword Ranking Trend */}
+      {currentDeal && (
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden mt-6">
+          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Search size={18} className="text-purple-500" />
+              <h2 className="text-lg font-bold text-gray-800">Keyword Ranking Trend</h2>
+            </div>
+            <div className="relative w-64">
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search keywords..."
+                value={keywordSearch}
+                onChange={e => setKeywordSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-300"
+              />
+            </div>
+          </div>
+
+          <div className="p-6">
+            <div className="bg-purple-50 border border-purple-200 rounded-xl p-6 text-center">
+              <Search size={32} className="mx-auto text-purple-300 mb-3" />
+              <h3 className="text-lg font-semibold text-purple-700 mb-2">Keyword Tracking Coming Soon</h3>
+              <p className="text-sm text-purple-600 max-w-lg mx-auto mb-4">
+                This section will show how keyword rankings trend as deals progress for {prod.name}.
+                Connect your Datarova API key to enable real-time keyword rank tracking.
+              </p>
+              <div className="bg-white rounded-lg p-4 max-w-md mx-auto text-left">
+                <p className="text-xs font-semibold text-gray-700 mb-2">Planned Features:</p>
+                <ul className="text-xs text-gray-600 space-y-1.5">
+                  <li className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                    Keyword rank trend chart (daily rank during deal period)
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                    Pre-deal vs during-deal rank comparison
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                    Top keywords by rank improvement
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                    Organic vs Sponsored rank split
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                    Search volume context per keyword
+                  </li>
+                </ul>
+              </div>
+              <p className="text-xs text-purple-500 mt-4">
+                To enable, add your Datarova API key in Settings
+              </p>
+            </div>
+
+            {/* Sample keyword table structure (placeholder data) */}
+            <div className="mt-6">
+              <table className="w-full">
+                <thead>
+                  <tr className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-100">
+                    <th className="px-4 py-3">Keyword</th>
+                    <th className="px-4 py-3">Search Volume</th>
+                    <th className="px-4 py-3">Pre-Deal Rank</th>
+                    <th className="px-4 py-3">Current Rank</th>
+                    <th className="px-4 py-3">Change</th>
+                    <th className="px-4 py-3">Trend</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    { kw: 'bamboo sheets king', vol: '22,400', pre: 15, cur: 8, trend: 'up' },
+                    { kw: 'bamboo bed sheets', vol: '18,100', pre: 22, cur: 14, trend: 'up' },
+                    { kw: 'cooling sheets', vol: '14,800', pre: 45, cur: 38, trend: 'up' },
+                    { kw: 'bamboo sheets queen', vol: '12,500', pre: 12, cur: 6, trend: 'up' },
+                    { kw: 'organic bamboo sheets', vol: '8,200', pre: 18, cur: 21, trend: 'down' },
+                  ].filter(k => !keywordSearch || k.kw.includes(keywordSearch.toLowerCase()))
+                  .map((k, i) => (
+                    <tr key={i} className={`text-sm ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'} opacity-40`}>
+                      <td className="px-4 py-3 font-medium text-gray-700">{k.kw}</td>
+                      <td className="px-4 py-3 text-gray-500">{k.vol}</td>
+                      <td className="px-4 py-3 text-gray-600">#{k.pre}</td>
+                      <td className="px-4 py-3 font-semibold text-gray-800">#{k.cur}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold ${
+                          k.trend === 'up' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                        }`}>
+                          {k.trend === 'up' ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+                          {Math.abs(k.pre - k.cur)} positions
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-gray-400">Sample data</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="text-[10px] text-gray-400 text-center mt-2 italic">
+                Sample data shown above. Connect Datarova API for live keyword ranking data.
+              </p>
+            </div>
           </div>
         </div>
       )}
