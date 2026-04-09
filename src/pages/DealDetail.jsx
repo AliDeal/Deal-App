@@ -5,13 +5,13 @@ import ProductTag from '../components/ProductTag';
 import DealTypeBadge from '../components/DealTypeBadge';
 import { format } from 'date-fns';
 import { ArrowLeft, Check, X, AlertTriangle, MessageSquare, Send, Trash2, ArrowRightLeft } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 
 export default function DealDetail() {
   const { dealId } = useParams();
   const navigate = useNavigate();
   const { deals, excludeSku, includeSku, updateSkuStatus, addComment, deleteComment } = useDeals();
-  const { getSkuFinancials } = useFinancials();
+  const { financials, getSkuFinancials } = useFinancials();
   const deal = deals.find(d => d.id === dealId);
   const [excludeModal, setExcludeModal] = useState(null);
   const [reason, setReason] = useState('');
@@ -19,6 +19,51 @@ export default function DealDetail() {
   const [commentAuthor, setCommentAuthor] = useState('');
   // Deal price overrides per SKU (local state, keyed by sku id)
   const [dealPrices, setDealPrices] = useState({});
+
+  // Load deal dashboard data from localStorage (uploaded in Deal Financials)
+  const dealDashboardData = useMemo(() => {
+    try {
+      const s = localStorage.getItem('dealapp-deal-dashboard');
+      return s ? JSON.parse(s, (k, v) => k === 'date' ? new Date(v) : v) : [];
+    } catch { return []; }
+  }, []);
+
+  // Find matching deal dashboard records for this deal
+  // Match by deal ID first, then by tag + date range overlap
+  const dealDashboardForDeal = useMemo(() => {
+    if (!deal) return [];
+    // Try matching by deal ID
+    let matches = dealDashboardData.filter(d => d.dealId === dealId);
+    // If no deal ID match, try matching by tag and date range
+    if (matches.length === 0) {
+      matches = dealDashboardData.filter(d => {
+        if (d.tag !== deal.parent) return false;
+        const dd = new Date(d.date);
+        return dd >= deal.startDate && dd <= deal.endDate;
+      });
+    }
+    // If still no match, try just by tag and closest date
+    if (matches.length === 0) {
+      matches = dealDashboardData.filter(d => d.tag === deal.parent);
+      if (matches.length > 0) {
+        // Get the latest date entries
+        const sorted = [...matches].sort((a, b) => new Date(b.date) - new Date(a.date));
+        const latestDate = sorted[0].dateStr;
+        matches = sorted.filter(d => d.dateStr === latestDate);
+      }
+    }
+    // Deduplicate by ASIN (keep latest)
+    const byAsin = new Map();
+    matches.forEach(d => {
+      const existing = byAsin.get(d.asin);
+      if (!existing || new Date(d.date) > new Date(existing.date)) {
+        byAsin.set(d.asin, d);
+      }
+    });
+    return Array.from(byAsin.values());
+  }, [deal, dealDashboardData, dealId]);
+
+  const hasDealDashboard = dealDashboardForDeal.length > 0;
 
   if (!deal) {
     return (
@@ -59,32 +104,75 @@ export default function DealDetail() {
     'Other',
   ];
 
-  // Build enriched SKU data by merging financials
+  // Build enriched SKU data by merging financials + deal dashboard data
   const enrichSku = (sku) => {
+    // Get product financials (COGS, FBA, Referral, etc.)
     const fin = getSkuFinancials(sku.sku);
-    if (!fin) return { ...sku, hasFinancials: false };
-    const dealPriceStr = dealPrices[sku.sku];
-    const dealPrice = dealPriceStr ? parseFloat(dealPriceStr) : null;
+    // Find matching deal dashboard entry by ASIN
+    const dashEntry = dealDashboardForDeal.find(d => d.asin === sku.asin);
+
+    if (!fin && !dashEntry) return { ...sku, hasFinancials: false };
+
+    const normalPrice = fin?.normalPrice || null;
+    const cogs = fin?.cogs || 0;
+    const fbaFee = fin?.fbaFee || 0;
+    const referralFee = fin?.referralFee || 0;
+    const tacosPct = fin?.tacosPct || 0;
+
+    // Deal price: from dashboard data first, then manual override
+    const manualPriceStr = dealPrices[sku.sku];
+    const manualPrice = manualPriceStr ? parseFloat(manualPriceStr) : null;
+    const dashDealPrice = dashEntry?.dealPrice || null;
+    const dealPrice = manualPrice || dashDealPrice;
     const hasDealPrice = dealPrice && !isNaN(dealPrice) && dealPrice > 0;
+
+    // Reference price from deal dashboard
+    const referencePrice = dashEntry?.referencePrice || null;
+
+    // STR: reference price > normal price
+    const strReflecting = referencePrice && normalPrice ? referencePrice > normalPrice : null;
+    const strPct = referencePrice && normalPrice ? ((referencePrice - normalPrice) / normalPrice) * 100 : null;
+
+    // Discount vs actual price
+    const discountVsActual = normalPrice && dealPrice ? ((normalPrice - dealPrice) / normalPrice) * 100 : null;
+
+    // Discount vs STR
+    const discountVsSTR = referencePrice && dealPrice ? ((referencePrice - dealPrice) / referencePrice) * 100 : null;
+
+    // Dashboard participation status
+    const dashParticipating = dashEntry ? dashEntry.participating : null;
+    const dashExclusionReason = dashEntry ? dashEntry.exclusionReason : '';
+
+    const finObj = fin || { normalPrice: normalPrice, cogs, fbaFee, referralFee, tacosPct };
+
     return {
       ...sku,
-      hasFinancials: true,
-      normalPrice: fin.normalPrice,
-      cogs: fin.cogs,
-      fbaFee: fin.fbaFee,
-      referralFee: fin.referralFee,
-      tacosPct: fin.tacosPct,
+      hasFinancials: !!fin,
+      hasDashboard: !!dashEntry,
+      normalPrice,
+      cogs,
+      fbaFee,
+      referralFee,
+      tacosPct,
       // Normal margins
-      grossMargin: calcGrossMargin(fin),
-      grossMarginPct: calcGrossMarginPct(fin),
-      netMargin: calcNetMargin(fin),
-      netMarginPct: calcNetMarginPct(fin),
-      // Deal margins (if deal price entered)
+      grossMargin: fin ? calcGrossMargin(fin) : null,
+      grossMarginPct: fin ? calcGrossMarginPct(fin) : null,
+      netMargin: fin ? calcNetMargin(fin) : null,
+      netMarginPct: fin ? calcNetMarginPct(fin) : null,
+      // Deal data from dashboard
       dealPrice: hasDealPrice ? dealPrice : null,
-      dealGrossMargin: hasDealPrice ? calcGrossMargin(fin, dealPrice) : null,
-      dealGrossMarginPct: hasDealPrice ? calcGrossMarginPct(fin, dealPrice) : null,
-      dealNetMargin: hasDealPrice ? calcNetMargin(fin, dealPrice) : null,
-      dealNetMarginPct: hasDealPrice ? calcNetMarginPct(fin, dealPrice) : null,
+      referencePrice,
+      strReflecting,
+      strPct,
+      discountVsActual,
+      discountVsSTR,
+      dashParticipating,
+      dashExclusionReason,
+      // Deal margins (using deal price)
+      dealGrossMargin: hasDealPrice && fin ? calcGrossMargin(fin, dealPrice) : null,
+      dealGrossMarginPct: hasDealPrice && fin ? calcGrossMarginPct(fin, dealPrice) : null,
+      dealNetMargin: hasDealPrice && fin ? calcNetMargin(fin, dealPrice) : null,
+      dealNetMarginPct: hasDealPrice && fin ? calcNetMarginPct(fin, dealPrice) : null,
     };
   };
 
@@ -162,9 +250,13 @@ export default function DealDetail() {
                 <th className="px-3 py-3">Referral</th>
                 <th className="px-3 py-3">Gross Margin</th>
                 <th className="px-3 py-3 bg-blue-50/50">Deal Price</th>
-                <th className="px-3 py-3 bg-blue-50/50">Deal Margin</th>
-                <th className="px-3 py-3 bg-blue-50/50">Deal NM</th>
+                <th className="px-3 py-3 bg-blue-50/50">Disc %</th>
+                <th className="px-3 py-3">Ref Price</th>
+                <th className="px-3 py-3">Disc vs STR</th>
                 <th className="px-3 py-3">STR</th>
+                <th className="px-3 py-3">STR %</th>
+                <th className="px-3 py-3 bg-green-50/50">Deal GM</th>
+                <th className="px-3 py-3 bg-green-50/50">Deal NM</th>
                 <th className="px-3 py-3">Action</th>
               </tr>
             </thead>
@@ -191,23 +283,66 @@ export default function DealDetail() {
                             </span>
                           </div>
                         </td>
-                        {/* Deal Price input */}
-                        <td className="px-3 py-3 bg-blue-50/30">
-                          <div className="relative">
-                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
-                            <input
-                              type="number"
-                              step="0.01"
-                              placeholder={sku.normalPrice.toFixed(2)}
-                              value={dealPrices[sku.sku] || ''}
-                              onChange={e => setDealPrice(sku.sku, e.target.value)}
-                              className="w-24 pl-5 pr-2 py-1 border border-blue-200 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white"
-                            />
-                          </div>
-                        </td>
-                        {/* Deal Gross Margin */}
+                        {/* Deal Price - auto from dashboard or manual input */}
                         <td className="px-3 py-3 bg-blue-50/30">
                           {sku.dealPrice ? (
+                            <span className="text-sm font-semibold text-blue-700">${sku.dealPrice.toFixed(2)}</span>
+                          ) : (
+                            <div className="relative">
+                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                              <input
+                                type="number" step="0.01"
+                                placeholder={sku.normalPrice?.toFixed(2) || '—'}
+                                value={dealPrices[sku.sku] || ''}
+                                onChange={e => setDealPrice(sku.sku, e.target.value)}
+                                className="w-24 pl-5 pr-2 py-1 border border-blue-200 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white"
+                              />
+                            </div>
+                          )}
+                        </td>
+                        {/* Discount vs Actual Price */}
+                        <td className="px-3 py-3 bg-blue-50/30">
+                          {sku.discountVsActual !== null ? (
+                            <span className={`text-xs font-bold ${sku.discountVsActual > 0 ? 'text-green-600' : 'text-red-500'}`}>
+                              {sku.discountVsActual.toFixed(1)}%
+                            </span>
+                          ) : <span className="text-gray-400 text-xs">—</span>}
+                        </td>
+                        {/* Reference Price */}
+                        <td className="px-3 py-3">
+                          {sku.referencePrice ? (
+                            <span className="text-sm text-gray-700">${sku.referencePrice.toFixed(2)}</span>
+                          ) : <span className="text-gray-400 text-xs">—</span>}
+                        </td>
+                        {/* Discount vs STR */}
+                        <td className="px-3 py-3">
+                          {sku.discountVsSTR !== null ? (
+                            <span className={`text-xs font-bold ${sku.discountVsSTR > 0 ? 'text-green-600' : 'text-red-500'}`}>
+                              {sku.discountVsSTR.toFixed(1)}%
+                            </span>
+                          ) : <span className="text-gray-400 text-xs">—</span>}
+                        </td>
+                        {/* STR Reflecting */}
+                        <td className="px-3 py-3">
+                          {sku.strReflecting !== null ? (
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                              sku.strReflecting ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                            }`}>
+                              {sku.strReflecting ? 'Yes' : 'No'}
+                            </span>
+                          ) : <span className="text-gray-400 text-xs">—</span>}
+                        </td>
+                        {/* STR % */}
+                        <td className="px-3 py-3">
+                          {sku.strPct !== null ? (
+                            <span className={`text-xs font-bold ${sku.strPct > 0 ? 'text-green-600' : sku.strPct < 0 ? 'text-red-500' : 'text-gray-600'}`}>
+                              {sku.strPct > 0 ? '+' : ''}{sku.strPct.toFixed(1)}%
+                            </span>
+                          ) : <span className="text-gray-400 text-xs">—</span>}
+                        </td>
+                        {/* Deal Gross Margin */}
+                        <td className="px-3 py-3 bg-green-50/30">
+                          {sku.dealGrossMargin !== null ? (
                             <div className="flex flex-col">
                               <span className={`text-sm font-bold ${marginColor(sku.dealGrossMarginPct)}`}>
                                 ${sku.dealGrossMargin.toFixed(2)}
@@ -216,13 +351,11 @@ export default function DealDetail() {
                                 {sku.dealGrossMarginPct.toFixed(1)}%
                               </span>
                             </div>
-                          ) : (
-                            <span className="text-xs text-gray-400">Enter deal price</span>
-                          )}
+                          ) : <span className="text-xs text-gray-400">—</span>}
                         </td>
                         {/* Deal Net Margin */}
-                        <td className="px-3 py-3 bg-blue-50/30">
-                          {sku.dealPrice ? (
+                        <td className="px-3 py-3 bg-green-50/30">
+                          {sku.dealNetMargin !== null ? (
                             <div className="flex flex-col">
                               <span className={`text-sm font-bold ${marginColor(sku.dealNetMarginPct)}`}>
                                 ${sku.dealNetMargin.toFixed(2)}
@@ -231,13 +364,11 @@ export default function DealDetail() {
                                 {sku.dealNetMarginPct.toFixed(1)}%
                               </span>
                             </div>
-                          ) : (
-                            <span className="text-xs text-gray-400">&mdash;</span>
-                          )}
+                          ) : <span className="text-xs text-gray-400">—</span>}
                         </td>
                       </>
                     ) : (
-                      <td colSpan={8} className="px-3 py-3 text-center">
+                      <td colSpan={12} className="px-3 py-3 text-center">
                         <span className="text-xs text-gray-400">
                           No financials data &mdash;{' '}
                           <button onClick={() => navigate('/financials')} className="text-blue-600 hover:underline cursor-pointer">
@@ -246,18 +377,6 @@ export default function DealDetail() {
                         </span>
                       </td>
                     )}
-                    <td className="px-3 py-3">
-                      <button
-                        onClick={() => updateSkuStatus(deal.id, sku.sku, { strReflecting: !sku.strReflecting })}
-                        className={`px-2.5 py-1 rounded-full text-xs font-semibold cursor-pointer ${
-                          sku.strReflecting
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-red-100 text-red-700'
-                        }`}
-                      >
-                        {sku.strReflecting ? 'Yes' : 'No'}
-                      </button>
-                    </td>
                     <td className="px-3 py-3">
                       <button
                         onClick={() => { setExcludeModal(sku.sku); setReason(''); }}
@@ -282,12 +401,13 @@ export default function DealDetail() {
             <strong>Gross Margin</strong> = Price - COGS - FBA - Referral
           </p>
           <p className="text-xs text-gray-500">
-            <strong>Net Margin</strong> = Gross Margin - (Price &times; TACOS%)
+            <strong>Deal GM</strong> = Deal Price - COGS - FBA - Referral &nbsp;|&nbsp;
+            <strong>Deal NM</strong> = Deal GM - (Deal Price &times; TACOS%) &nbsp;|&nbsp;
+            <strong>STR</strong> = Ref Price {'>'} Normal Price
           </p>
-          <div className="flex items-center gap-1 text-xs text-blue-600">
-            <ArrowRightLeft size={12} />
-            <span>Blue columns use deal price for margin calculation</span>
-          </div>
+          {hasDealDashboard && (
+            <p className="text-xs text-blue-600 mt-1">Deal prices auto-populated from Deal Financials upload ({dealDashboardForDeal.length} SKUs matched)</p>
+          )}
         </div>
       </div>
 
