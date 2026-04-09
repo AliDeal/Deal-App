@@ -19,6 +19,8 @@ export default function Dashboard() {
   const [endDate, setEndDate] = useState('');
 
   // Apply filters
+  const today = new Date();
+
   const filtered = deals.filter(d => {
     if (marketplace !== 'ALL' && d.marketplace !== marketplace) return false;
     if (dealType !== 'ALL' && d.type !== dealType) return false;
@@ -32,10 +34,25 @@ export default function Dashboard() {
       if (d.startDate > to) return false;
     }
     return true;
+  }).sort((a, b) => {
+    // Sort: active deals first, then upcoming (closest first), then past (most recent first)
+    const aActive = a.startDate <= today && a.endDate >= today;
+    const bActive = b.startDate <= today && b.endDate >= today;
+    if (aActive && !bActive) return -1;
+    if (!aActive && bActive) return 1;
+    if (aActive && bActive) return a.startDate - b.startDate;
+
+    const aUpcoming = a.startDate > today;
+    const bUpcoming = b.startDate > today;
+    if (aUpcoming && !bUpcoming) return -1;
+    if (!aUpcoming && bUpcoming) return 1;
+    if (aUpcoming && bUpcoming) return a.startDate - b.startDate; // closest upcoming first
+
+    // Both past: most recent first
+    return b.startDate - a.startDate;
   });
 
   const stats = getDealStats(filtered);
-  const today = new Date();
   const activeDeals = filtered.filter(d => d.startDate <= today && d.endDate >= today);
   const hasFilters = marketplace !== 'ALL' || dealType !== 'ALL' || product !== 'ALL' || startDate || endDate;
 
