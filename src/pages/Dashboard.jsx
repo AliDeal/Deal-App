@@ -5,7 +5,7 @@ import { getDealStats, PRODUCTS, MARKETPLACES } from '../data/deals';
 import ProductTag from '../components/ProductTag';
 import DealTypeBadge from '../components/DealTypeBadge';
 import { format } from 'date-fns';
-import { Filter, Globe, Calendar, Tag, Package } from 'lucide-react';
+import { Filter, Globe, Calendar, Tag, Package, Search, X, ChevronDown } from 'lucide-react';
 
 export default function Dashboard() {
   const { deals } = useDeals();
@@ -17,6 +17,13 @@ export default function Dashboard() {
   const [product, setProduct] = useState('ALL');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [productDropdownOpen, setProductDropdownOpen] = useState(false);
+  const [productSearch, setProductSearch] = useState('');
+
+  const productEntries = Object.entries(PRODUCTS);
+  const filteredProducts = productSearch
+    ? productEntries.filter(([key, p]) => p.name.toLowerCase().includes(productSearch.toLowerCase()) || p.shortName.toLowerCase().includes(productSearch.toLowerCase()))
+    : productEntries;
 
   // Apply filters
   const today = new Date();
@@ -159,22 +166,50 @@ export default function Dashboard() {
               <Package size={13} /> Product
             </label>
             <div className="relative">
-              <select
-                value={product}
-                onChange={e => setProduct(e.target.value)}
-                className="w-full appearance-none px-3 py-2 pr-8 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300 cursor-pointer"
+              <div
+                onClick={() => setProductDropdownOpen(!productDropdownOpen)}
+                className="w-full px-3 py-2 pr-8 border border-gray-200 rounded-lg text-sm font-medium bg-white cursor-pointer flex items-center justify-between"
                 style={product !== 'ALL' ? { borderColor: PRODUCTS[product]?.color, color: PRODUCTS[product]?.color } : {}}
               >
-                <option value="ALL">All Products</option>
-                {Object.entries(PRODUCTS).map(([key, prod]) => (
-                  <option key={key} value={key}>{prod.shortName} - {prod.name}</option>
-                ))}
-              </select>
-              <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
-                <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
+                <span>{product === 'ALL' ? 'All Products' : `${PRODUCTS[product]?.shortName} - ${PRODUCTS[product]?.name}`}</span>
+                <ChevronDown size={14} className="text-gray-400" />
               </div>
+              {productDropdownOpen && (
+                <div className="absolute z-20 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl max-h-64 flex flex-col">
+                  <div className="px-3 py-2 border-b border-gray-100">
+                    <div className="relative">
+                      <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input
+                        type="text" placeholder="Search products..."
+                        value={productSearch} onChange={e => setProductSearch(e.target.value)} autoFocus
+                        className="w-full pl-8 pr-3 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex-1 overflow-y-auto">
+                    <button
+                      onClick={() => { setProduct('ALL'); setProductDropdownOpen(false); setProductSearch(''); }}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer ${product === 'ALL' ? 'bg-blue-50 font-semibold text-blue-700' : 'text-gray-700'}`}
+                    >
+                      All Products
+                    </button>
+                    {filteredProducts.map(([key, prod]) => (
+                      <button
+                        key={key}
+                        onClick={() => { setProduct(key); setProductDropdownOpen(false); setProductSearch(''); }}
+                        className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer ${product === key ? 'bg-blue-50 font-semibold' : ''}`}
+                        style={product === key ? { color: prod.color } : {}}
+                      >
+                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: prod.color }} />
+                        {prod.shortName} - {prod.name}
+                      </button>
+                    ))}
+                    {filteredProducts.length === 0 && (
+                      <div className="px-3 py-3 text-center text-gray-400 text-xs">No matching products</div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
