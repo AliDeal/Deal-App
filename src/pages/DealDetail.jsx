@@ -1,7 +1,7 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useDeals } from '../context/DealContext';
 import { useFinancials, calcGrossMargin, calcGrossMarginPct, calcNetMargin, calcNetMarginPct } from '../context/FinancialsContext';
-import { getTotalParentSkus } from '../data/deals';
+import { getTotalParentSkus, PRODUCT_SKUS } from '../data/deals';
 import ProductTag from '../components/ProductTag';
 import DealTypeBadge from '../components/DealTypeBadge';
 import { format } from 'date-fns';
@@ -136,12 +136,18 @@ export default function DealDetail() {
     const referralFee = fin?.referralFee || 0;
     const tacosPct = fin?.tacosPct || 0;
 
-    // Deal price: from dashboard data first, then manual override
+    // Deal price priority: manual override > Deal Financials upload > seeded SKU data.
+    // The seeded fallback comes from PRODUCT_SKUS[parent], looked up by sku name or ASIN
+    // (asin lookup matters when an upload reshapes the SKU object via effectiveSkus).
     const manualPriceStr = dealPrices[sku.sku];
     const manualPrice = manualPriceStr ? parseFloat(manualPriceStr) : null;
     const dashDealPrice = dashEntry?.dealPrice || null;
-    const dealPrice = manualPrice || dashDealPrice;
+    const seedSku = (PRODUCT_SKUS[deal.parent] || []).find(s => s.sku === sku.sku || s.asin === sku.asin);
+    const seededDealPrice = seedSku?.dealPrice || null;
+    const dealPrice = manualPrice || dashDealPrice || seededDealPrice;
     const hasDealPrice = dealPrice && !isNaN(dealPrice) && dealPrice > 0;
+    // Track which source the price came from so we can hint it in the UI
+    const dealPriceSource = manualPrice ? 'manual' : dashDealPrice ? 'upload' : seededDealPrice ? 'default' : null;
 
     // Reference price from deal dashboard
     const referencePrice = dashEntry?.referencePrice || null;
@@ -178,6 +184,7 @@ export default function DealDetail() {
       netMarginPct: fin ? calcNetMarginPct(fin) : null,
       // Deal data from dashboard
       dealPrice: hasDealPrice ? dealPrice : null,
+      dealPriceSource,
       referencePrice,
       strReflecting,
       strPct,
@@ -306,10 +313,18 @@ export default function DealDetail() {
                             </span>
                           </div>
                         </td>
-                        {/* Deal Price - auto from dashboard or manual input */}
+                        {/* Deal Price - auto from dashboard / seeded default / manual input */}
                         <td className="px-3 py-3 bg-blue-50/30">
                           {sku.dealPrice ? (
-                            <span className="text-sm font-semibold text-blue-700">${sku.dealPrice.toFixed(2)}</span>
+                            <div className="flex flex-col">
+                              <span className="text-sm font-semibold text-blue-700">${sku.dealPrice.toFixed(2)}</span>
+                              {sku.dealPriceSource === 'default' && (
+                                <span className="text-[10px] text-gray-400 italic" title="From seeded SKU defaults — upload Deal Financials to use real values">default</span>
+                              )}
+                              {sku.dealPriceSource === 'upload' && (
+                                <span className="text-[10px] text-blue-500 italic" title="From your Deal Financials upload">from upload</span>
+                              )}
+                            </div>
                           ) : (
                             <div className="relative">
                               <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
@@ -428,8 +443,12 @@ export default function DealDetail() {
             <strong>Deal NM</strong> = Deal GM - (Deal Price &times; TACOS%) &nbsp;|&nbsp;
             <strong>STR</strong> = Ref Price {'>'} Normal Price
           </p>
-          {hasDealDashboard && (
+          {hasDealDashboard ? (
             <p className="text-xs text-blue-600 mt-1">Deal prices auto-populated from Deal Financials upload ({dealDashboardForDeal.length} SKUs matched)</p>
+          ) : (
+            <p className="text-xs text-gray-500 mt-1">
+              Deal prices: <strong>upload</strong> (from <a href="#/deal-financials" className="text-blue-600 hover:underline">Deal Financials</a>) → <strong>default</strong> (seeded) → manual entry
+            </p>
           )}
         </div>
       </div>
