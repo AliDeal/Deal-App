@@ -93,7 +93,6 @@ export default function ProductFinancials() {
           // Legacy column: Referral Fee (we'll convert to rate using normal price)
           if (['referralfee'].includes(h)) colMap.referralFee = i;
           if (['tacos', 'tacos%', 'tacospct', 'adspend%'].includes(h)) colMap.tacosPct = i;
-          if (['defaultdealprice', 'dealprice', 'seeddealprice'].includes(h)) colMap.defaultDealPrice = i;
         });
 
         // Either Referral Rate or legacy Referral Fee must be present
@@ -146,7 +145,6 @@ export default function ProductFinancials() {
             fbaFee: parseFloat(cols[colMap.fbaFee]) || 0,
             referralRate,
             tacosPct: colMap.tacosPct !== undefined ? parseFloat(cols[colMap.tacosPct]) || 0 : 0,
-            defaultDealPrice: colMap.defaultDealPrice !== undefined ? (parseFloat(cols[colMap.defaultDealPrice]) || null) : null,
           });
         }
 
@@ -168,8 +166,8 @@ export default function ProductFinancials() {
   };
 
   const handleDownloadTemplate = () => {
-    const header = 'Tag,ASIN,SKU,Variant,Normal Price,COGS,FBA Fee,Referral Rate,TACOS%,Default Deal Price';
-    const sample = 'B4,B0XXXXXX01,B4-WHT-Q,White - Queen,44.99,8.50,5.80,0.15,12.0,34.99';
+    const header = 'Tag,ASIN,SKU,Variant,Normal Price,COGS,FBA Fee,Referral Rate,TACOS%';
+    const sample = 'B4,B0XXXXXX01,B4-WHT-Q,White - Queen,44.99,8.50,5.80,0.15,12.0';
     const blob = new Blob([header + '\n' + sample + '\n'], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -180,14 +178,14 @@ export default function ProductFinancials() {
   };
 
   const handleExport = () => {
-    const header = 'Tag,ASIN,SKU,Variant,Normal Price,COGS,FBA Fee,Referral Rate,Referral Fee,TACOS%,Default Deal Price,Gross Margin,Gross Margin %,Net Margin,Net Margin %';
+    const header = 'Tag,ASIN,SKU,Variant,Normal Price,COGS,FBA Fee,Referral Rate,Referral Fee,TACOS%,Gross Margin,Gross Margin %,Net Margin,Net Margin %';
     const rows = financials.map(f => {
       const gm = calcGrossMargin(f);
       const gmPct = calcGrossMarginPct(f);
       const nm = calcNetMargin(f);
       const nmPct = calcNetMarginPct(f);
       const refFee = calcReferralFee(f);
-      return `${f.tag},${f.asin},${f.sku},${f.variant || ''},${f.normalPrice},${f.cogs},${f.fbaFee},${(f.referralRate ?? 0.15).toFixed(4)},${refFee.toFixed(2)},${f.tacosPct},${f.defaultDealPrice ?? ''},${gm.toFixed(2)},${gmPct.toFixed(1)},${nm.toFixed(2)},${nmPct.toFixed(1)}`;
+      return `${f.tag},${f.asin},${f.sku},${f.variant || ''},${f.normalPrice},${f.cogs},${f.fbaFee},${(f.referralRate ?? 0.15).toFixed(4)},${refFee.toFixed(2)},${f.tacosPct},${gm.toFixed(2)},${gmPct.toFixed(1)},${nm.toFixed(2)},${nmPct.toFixed(1)}`;
     });
     const blob = new Blob([header + '\n' + rows.join('\n') + '\n'], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -244,7 +242,8 @@ export default function ProductFinancials() {
             Required: Tag, ASIN, SKU, Normal Price, COGS, FBA Fee, Referral Rate (decimal 0.15 or percent 15), TACOS%
           </p>
           <p className="text-[11px] text-gray-400 mt-0.5">
-            Optional: Variant, Default Deal Price. Legacy "Referral Fee" column still accepted (auto-converted to rate).
+            Optional: Variant. Legacy "Referral Fee" column still accepted (auto-converted to rate).
+            Deal prices belong in <a href="#/deal-financials" className="text-blue-600 hover:underline">Deal Financials</a>, not here.
           </p>
           <input
             ref={fileRef}

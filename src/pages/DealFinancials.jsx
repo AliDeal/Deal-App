@@ -1,6 +1,5 @@
 import { useState, useRef, useMemo } from 'react';
 import { PRODUCTS } from '../data/deals';
-import { useDeals } from '../context/DealContext';
 import {
   useFinancials,
   calcGrossMargin, calcGrossMarginPct, calcNetMargin, calcNetMarginPct, calcReferralFee,
@@ -210,53 +209,15 @@ function getWeekOptions(year) {
 }
 
 export default function DealFinancials() {
-  const { financials, findSku, getDefaultDealPrice } = useFinancials();
-  const { deals } = useDeals();
+  const { financials, findSku } = useFinancials();
   const fileRef = useRef(null);
   const [uploadStatus, setUploadStatus] = useState(null);
-  const [uploadedDealData, setUploadedDealData] = useState(() => {
+  const [dealData, setDealData] = useState(() => {
     try {
       const s = localStorage.getItem('dealapp-deal-dashboard');
       return s ? JSON.parse(s, (k, v) => k === 'date' ? new Date(v) : v) : [];
     } catch { return []; }
   });
-
-  // When the user has no upload yet, synthesize rows from seeded data so the
-  // page is populated and matches what DealDetail shows. Each deal × SKU pair
-  // becomes one synthetic row using defaultDealPrice from the financials record.
-  const seededDealData = useMemo(() => {
-    if (uploadedDealData.length > 0) return [];
-    const rows = [];
-    deals.forEach(deal => {
-      deal.skus.forEach(sku => {
-        const fin = findSku(sku.sku, sku.asin);
-        const dealPrice = getDefaultDealPrice(sku.sku) ?? getDefaultDealPrice(sku.asin) ?? null;
-        if (!fin) return;
-        rows.push({
-          date: deal.startDate,
-          dateStr: format(deal.startDate, 'yyyy-MM-dd'),
-          tag: deal.parent,
-          asin: sku.asin,
-          skuName: sku.variant || sku.sku,
-          referencePrice: null,
-          dealPrice,
-          refPriceStatus: 'ok',
-          dealPriceStatus: 'ok',
-          dealId: deal.id,
-          participating: true,
-          exclusionReason: '',
-          inStock: 1,
-          __synthetic: true, // marker so the UI can show "from seed"
-        });
-      });
-    });
-    return rows;
-  }, [uploadedDealData.length, deals, findSku, getDefaultDealPrice]);
-
-  // The active dataset: real upload if it exists, otherwise the synthesized seed.
-  const dealData = uploadedDealData.length > 0 ? uploadedDealData : seededDealData;
-  const isUsingSeed = uploadedDealData.length === 0 && seededDealData.length > 0;
-  const setDealData = setUploadedDealData;
 
   // Filters
   const [productFilter, setProductFilter] = useState('ALL');
@@ -299,12 +260,11 @@ export default function DealFinancials() {
 
   // Save deal data
   const saveDealData = (data) => {
-    setUploadedDealData(data);
+    setDealData(data);
     localStorage.setItem('dealapp-deal-dashboard', JSON.stringify(data));
   };
 
-  // Upload handler — merge against the REAL uploaded data, not the synthesized seed,
-  // so seed rows don't end up persisted into the upload.
+  // Upload handler
   const processUploadedData = (csvText) => {
     const parsed = parseDealDashboardCSV(csvText);
     if (parsed.length === 0) {
@@ -312,7 +272,7 @@ export default function DealFinancials() {
       return;
     }
     const existingMap = new Map();
-    uploadedDealData.forEach(d => existingMap.set(`${d.dateStr}-${d.asin}`, d));
+    dealData.forEach(d => existingMap.set(`${d.dateStr}-${d.asin}`, d));
     parsed.forEach(d => existingMap.set(`${d.dateStr}-${d.asin}`, d));
     const merged = Array.from(existingMap.values());
     saveDealData(merged);
@@ -486,18 +446,6 @@ export default function DealFinancials() {
         <p className="text-xs text-gray-400">
           Upload the Amazon Deal Dashboard export (.csv or .xlsx). Required columns: Date, TAG, ASIN, SKU, Reference Price, Max Deal Price, Deal ID
         </p>
-        {isUsingSeed && (
-          <div className="mt-3 flex items-start gap-2 px-4 py-2.5 rounded-lg text-sm bg-amber-50 border border-amber-200 text-amber-800">
-            <AlertCircle size={16} className="mt-0.5 shrink-0" />
-            <div>
-              <p className="font-semibold">Showing seeded defaults</p>
-              <p className="text-xs mt-0.5 text-amber-700">
-                No Deal Dashboard upload yet — these rows are auto-generated from default deal prices in Product Financials
-                so the page stays in sync with Deal Detail. Upload a real CSV to replace them.
-              </p>
-            </div>
-          </div>
-        )}
         {uploadStatus && (
           <div className={`mt-3 flex items-center gap-2 px-4 py-2 rounded-lg text-sm ${
             uploadStatus.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'

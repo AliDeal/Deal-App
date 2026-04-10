@@ -36,7 +36,7 @@ export default function DealDetail() {
   const { dealId } = useParams();
   const navigate = useNavigate();
   const { deals, excludeSku, includeSku, addComment, deleteComment } = useDeals();
-  const { findSku, getDefaultDealPrice } = useFinancials();
+  const { findSku } = useFinancials();
   const deal = deals.find(d => d.id === dealId);
   const [excludeModal, setExcludeModal] = useState(null);
   const [reason, setReason] = useState('');
@@ -183,7 +183,9 @@ export default function DealDetail() {
 
   // Build enriched SKU data by merging financials + deal dashboard data.
   // Financials are looked up via FinancialsContext (sku code first, ASIN fallback).
-  // Deal price comes from a precedence chain: manual override → upload → seeded default.
+  // Deal price precedence: manual override → Deal Financials upload → empty.
+  // No seeded default — deal prices are per-(deal, SKU) so a single per-SKU
+  // default would be misleading. Empty until uploaded or manually entered.
   const enrichSku = (sku) => {
     const fin = findSku(sku.sku, sku.asin);
     const dashEntry = dealDashboardForDeal.find(d => d.asin === sku.asin);
@@ -195,13 +197,12 @@ export default function DealDetail() {
     const fbaFee = fin?.fbaFee || 0;
     const tacosPct = fin?.tacosPct || 0;
 
-    // Deal price precedence: manual override → upload → seeded default
+    // Deal price precedence: manual override → upload → empty
     const manualPrice = typeof dealPrices[sku.sku] === 'number' ? dealPrices[sku.sku] : null;
     const dashDealPrice = dashEntry?.dealPrice || null;
-    const seededDealPrice = getDefaultDealPrice(sku.sku) ?? getDefaultDealPrice(sku.asin);
-    const dealPrice = manualPrice || dashDealPrice || seededDealPrice;
+    const dealPrice = manualPrice || dashDealPrice;
     const hasDealPrice = dealPrice && !isNaN(dealPrice) && dealPrice > 0;
-    const dealPriceSource = manualPrice ? 'manual' : dashDealPrice ? 'upload' : seededDealPrice ? 'default' : null;
+    const dealPriceSource = manualPrice ? 'manual' : dashDealPrice ? 'upload' : null;
 
     // Reference price from deal dashboard
     const referencePrice = dashEntry?.referencePrice || null;
@@ -392,9 +393,6 @@ export default function DealDetail() {
                             <div className="group flex items-center gap-1.5">
                               <div className="flex flex-col">
                                 <span className="text-sm font-semibold text-blue-700">${sku.dealPrice.toFixed(2)}</span>
-                                {sku.dealPriceSource === 'default' && (
-                                  <span className="text-[10px] text-gray-400 italic" title="From seeded SKU defaults — upload Deal Financials to use real values">default</span>
-                                )}
                                 {sku.dealPriceSource === 'upload' && (
                                   <span className="text-[10px] text-blue-500 italic" title="From your Deal Financials upload">from upload</span>
                                 )}
@@ -535,7 +533,7 @@ export default function DealDetail() {
             <strong>Referral fee = Price × 15%</strong>, recalculated at the deal price for Deal GM/NM.
             {hasDealDashboard
               ? <> Deal prices auto-populated from Deal Financials upload ({dealDashboardForDeal.length} SKUs matched).</>
-              : <> Deal prices: <strong>upload</strong> (from <a href="#/deal-financials" className="text-blue-600 hover:underline">Deal Financials</a>) → <strong>default</strong> (seeded) → manual override (pencil icon).</>
+              : <> Deal prices come from a <a href="#/deal-financials" className="text-blue-600 hover:underline">Deal Financials</a> upload (per-deal pricing). Until uploaded, click <strong>+ add price</strong> on a row to enter manually.</>
             }
           </p>
         </div>

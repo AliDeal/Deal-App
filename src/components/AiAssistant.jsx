@@ -5,7 +5,7 @@ import { useFinancials, calcGrossMargin, calcGrossMarginPct } from '../context/F
 import { PRODUCTS, DEAL_TYPES } from '../data/deals';
 import { format } from 'date-fns';
 
-function generateResponse(query, deals, findSku, getDefaultDealPrice) {
+function generateResponse(query, deals, findSku) {
   const q = query.toLowerCase();
 
   // Active / current deals
@@ -55,15 +55,15 @@ function generateResponse(query, deals, findSku, getDefaultDealPrice) {
     return `There are **${allExcluded.length}** excluded SKUs:\n${lines.join('\n')}${allExcluded.length > 8 ? `\n  - ...and ${allExcluded.length - 8} more` : ''}`;
   }
 
-  // Margin queries
+  // Margin queries (computed at normal price — deal-price margins require an
+  // upload to be present, which we don't read here for simplicity).
   if (q.includes('margin') || q.includes('profit')) {
     const margins = [];
     deals.forEach(d => d.skus.filter(s => s.participating).forEach(s => {
       const fin = findSku(s.sku, s.asin);
       if (!fin) return;
-      const dealPrice = getDefaultDealPrice(s.sku) ?? getDefaultDealPrice(s.asin) ?? fin.normalPrice;
-      const margin = calcGrossMargin(fin, dealPrice);
-      const pct = calcGrossMarginPct(fin, dealPrice);
+      const margin = calcGrossMargin(fin);
+      const pct = calcGrossMarginPct(fin);
       margins.push({ sku: s.sku, margin, pct, deal: d.id });
     }));
     const negative = margins.filter(m => m.margin < 0);
@@ -106,7 +106,7 @@ export default function AiAssistant() {
     { role: 'assistant', text: 'Hi! I\'m your Deal Assistant. Ask me anything about your deals, products, margins, or SKUs.' },
   ]);
   const { deals } = useDeals();
-  const { findSku, getDefaultDealPrice } = useFinancials();
+  const { findSku } = useFinancials();
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -126,7 +126,7 @@ export default function AiAssistant() {
 
     // Simulate brief typing delay
     setTimeout(() => {
-      const response = generateResponse(userMsg, deals, findSku, getDefaultDealPrice);
+      const response = generateResponse(userMsg, deals, findSku);
       setMessages(prev => [...prev, { role: 'assistant', text: response }]);
     }, 400);
   };
