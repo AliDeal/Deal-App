@@ -1,6 +1,7 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useDeals } from '../context/DealContext';
 import { useFinancials, calcGrossMargin, calcGrossMarginPct, calcNetMargin, calcNetMarginPct } from '../context/FinancialsContext';
+import { getTotalParentSkus } from '../data/deals';
 import ProductTag from '../components/ProductTag';
 import DealTypeBadge from '../components/DealTypeBadge';
 import { format } from 'date-fns';
@@ -236,11 +237,17 @@ export default function DealDetail() {
           <div className="text-right">
             <div className="flex gap-4">
               <div className="text-center">
-                <p className="text-2xl font-bold text-green-600">{participating.length}</p>
+                <p className="text-2xl font-bold text-green-600">
+                  {participating.length}
+                  <span className="text-base font-normal text-gray-400">/{getTotalParentSkus(deal.parent)}</span>
+                </p>
                 <p className="text-xs text-gray-500">Participating</p>
               </div>
               <div className="text-center">
-                <p className="text-2xl font-bold text-red-500">{excluded.length}</p>
+                <p className="text-2xl font-bold text-red-500">
+                  {excluded.length}
+                  <span className="text-base font-normal text-gray-400">/{getTotalParentSkus(deal.parent)}</span>
+                </p>
                 <p className="text-xs text-gray-500">Excluded</p>
               </div>
             </div>

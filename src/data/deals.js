@@ -157,6 +157,12 @@ export const deals = csvData.split('\n').map(line => {
   };
 });
 
+// Total SKUs that exist for a given parent product (e.g. all variants of B4),
+// regardless of which SKUs are currently in any specific deal.
+export function getTotalParentSkus(parentCode) {
+  return PRODUCT_SKUS[parentCode]?.length || 0;
+}
+
 export function getDealStats(dealList) {
   const ld = dealList.filter(d => d.type === 'LD').length;
   const bd = dealList.filter(d => d.type === 'BD').length;

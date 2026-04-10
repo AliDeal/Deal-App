@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDeals } from '../context/DealContext';
-import { PRODUCTS, DEAL_TYPES } from '../data/deals';
+import { PRODUCTS, DEAL_TYPES, getTotalParentSkus } from '../data/deals';
 import ProductTag from '../components/ProductTag';
 import DealTypeBadge from '../components/DealTypeBadge';
 import { format } from 'date-fns';
@@ -155,7 +155,7 @@ export default function DealCalendar() {
                       <td className="px-6 py-3.5 text-sm text-gray-600">{deal.duration} day{deal.duration > 1 ? 's' : ''}</td>
                       <td className="px-6 py-3.5">
                         <span className="text-sm font-medium text-green-600">{participating}</span>
-                        <span className="text-sm text-gray-400">/{deal.skus.length}</span>
+                        <span className="text-sm text-gray-400">/{getTotalParentSkus(deal.parent)}</span>
                       </td>
                     </tr>
                   );

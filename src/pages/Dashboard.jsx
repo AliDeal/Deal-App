@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDeals } from '../context/DealContext';
-import { getDealStats, PRODUCTS, MARKETPLACES } from '../data/deals';
+import { getDealStats, getTotalParentSkus, PRODUCTS, MARKETPLACES } from '../data/deals';
+import { TOP_SKUS, getSkuRank, hasRankings } from '../data/topSkus';
 import ProductTag from '../components/ProductTag';
 import DealTypeBadge from '../components/DealTypeBadge';
 import { format } from 'date-fns';
-import { Filter, Globe, Calendar, Tag, Package, Search, X, ChevronDown } from 'lucide-react';
+import { Filter, Globe, Calendar, Tag, Package, Search, X, ChevronDown, ChevronRight, AlertTriangle, Trophy } from 'lucide-react';
 
 export default function Dashboard() {
   const { deals } = useDeals();
@@ -19,6 +20,10 @@ export default function Dashboard() {
   const [endDate, setEndDate] = useState('');
   const [productDropdownOpen, setProductDropdownOpen] = useState(false);
   const [productSearch, setProductSearch] = useState('');
+  // Excluded SKUs modal: null = closed, 'list' = list view, dealId = drilled into a deal
+  const [excludedModal, setExcludedModal] = useState(null);
+  // Top Excluded SKUs: which deal the user has selected
+  const [topExcludedDealId, setTopExcludedDealId] = useState('');
 
   const productEntries = Object.entries(PRODUCTS);
   const filteredProducts = productSearch
@@ -62,6 +67,23 @@ export default function Dashboard() {
   const stats = getDealStats(filtered);
   const activeDeals = filtered.filter(d => d.startDate <= today && d.endDate >= today);
   const hasFilters = marketplace !== 'ALL' || dealType !== 'ALL' || product !== 'ALL' || startDate || endDate;
+
+  // Upcoming deals (start date in the future) that have at least one excluded SKU
+  const upcomingDealsWithExclusions = filtered
+    .filter(d => d.startDate > today)
+    .filter(d => d.skus.some(s => !s.participating))
+    .sort((a, b) => a.startDate - b.startDate);
+
+  // Deals (any time) that have at least one exclusion — for the Top Excluded picker
+  const dealsWithExclusions = filtered
+    .filter(d => d.skus.some(s => !s.participating))
+    .sort((a, b) => a.startDate - b.startDate);
+  const selectedTopExcludedDeal = dealsWithExclusions.find(d => d.id === topExcludedDealId);
+  const topExcludedSkus = selectedTopExcludedDeal
+    ? [...selectedTopExcludedDeal.skus.filter(s => !s.participating)]
+        .sort((a, b) => getSkuRank(selectedTopExcludedDeal.parent, a.sku) - getSkuRank(selectedTopExcludedDeal.parent, b.sku))
+        .slice(0, 5)
+    : [];
 
   const clearFilters = () => {
     setMarketplace('ALL');
@@ -237,7 +259,7 @@ export default function Dashboard() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-5 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
         <div className="bg-white rounded-xl p-5 border-t-4 border-brand-orange shadow-sm">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Deals</p>
           <p className="text-3xl font-bold text-gray-800 mt-1">{stats.total}</p>
@@ -246,39 +268,282 @@ export default function Dashboard() {
             {hasFilters ? 'Filtered' : 'Active tracking'}
           </span>
         </div>
-        <div className="bg-white rounded-xl p-5 border-t-4 border-brand-green shadow-sm">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total SKUs</p>
-          <p className="text-3xl font-bold text-gray-800 mt-1">{stats.totalSkus}</p>
-          <p className="text-sm text-gray-500 mt-1">Across {stats.products} products</p>
-        </div>
-        <div className="bg-white rounded-xl p-5 border-t-4 border-brand-red shadow-sm">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Excluded SKUs</p>
-          <p className="text-3xl font-bold text-gray-800 mt-1">{stats.excludedSkus}</p>
-          <p className="text-sm text-gray-500 mt-1">Across all deals</p>
-        </div>
+
+        {/* Excluded SKUs — clickable, opens modal */}
+        <button
+          onClick={() => setExcludedModal('list')}
+          className="bg-white rounded-xl p-5 border-t-4 border-brand-red shadow-sm text-left hover:shadow-md hover:bg-red-50/30 transition-all cursor-pointer group"
+        >
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Excluded SKUs</p>
+              <p className="text-3xl font-bold text-gray-800 mt-1">{stats.excludedSkus}</p>
+              <p className="text-sm text-gray-500 mt-1">
+                {upcomingDealsWithExclusions.length === 0
+                  ? 'No upcoming deals affected'
+                  : `${upcomingDealsWithExclusions.length} upcoming deal${upcomingDealsWithExclusions.length > 1 ? 's' : ''} affected`}
+              </p>
+            </div>
+            <ChevronRight size={18} className="text-gray-300 group-hover:text-red-400 mt-1 transition-colors" />
+          </div>
+        </button>
+
+        {/* Active Now — expanded with product codes + dates */}
         <div className="bg-white rounded-xl p-5 border-t-4 border-brand-blue shadow-sm">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Active Now</p>
           <p className="text-3xl font-bold text-gray-800 mt-1">{activeDeals.length}</p>
           <p className="text-sm text-gray-500 mt-1">Running deals</p>
+          {activeDeals.length > 0 && (
+            <div className="mt-3 space-y-1.5">
+              {activeDeals.map(d => (
+                <button
+                  key={d.id}
+                  onClick={() => navigate(`/deal/${d.id}`)}
+                  className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 rounded-lg text-xs transition-colors cursor-pointer"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className="px-1.5 py-0.5 rounded text-white font-bold text-[10px]"
+                      style={{ backgroundColor: PRODUCTS[d.parent]?.color }}
+                    >
+                      {d.parent}
+                    </span>
+                    <span className="font-semibold text-gray-700">{d.id}</span>
+                  </span>
+                  <span className="text-gray-500">
+                    {format(d.startDate, 'MMM d')}{d.duration > 1 ? ` – ${format(d.endDate, 'MMM d')}` : ''}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Active Deals Banner */}
-      {activeDeals.length > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
-          <h3 className="font-semibold text-blue-800">
-            {activeDeals.length} Active Deal{activeDeals.length > 1 ? 's' : ''} Right Now
-          </h3>
-          <div className="flex flex-wrap gap-2 mt-2">
-            {activeDeals.map(d => (
+      {/* Top Excluded SKUs Section */}
+      <div className="bg-white rounded-xl shadow-sm p-5 mb-6">
+        <div className="flex items-center justify-between gap-4 mb-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Trophy size={18} className="text-amber-500" />
+            <h2 className="text-base font-bold text-gray-800">Top Excluded SKUs</h2>
+            <span className="text-xs text-gray-400">Top 5 highest-priority SKUs excluded from a deal</span>
+          </div>
+          <select
+            value={topExcludedDealId}
+            onChange={e => setTopExcludedDealId(e.target.value)}
+            className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-300 cursor-pointer min-w-[260px]"
+          >
+            <option value="">Select a deal…</option>
+            {dealsWithExclusions.map(d => {
+              const excludedCount = d.skus.filter(s => !s.participating).length;
+              return (
+                <option key={d.id} value={d.id}>
+                  {d.id} — {d.parent} — {format(d.startDate, 'MMM d, yyyy')} ({excludedCount} excluded)
+                </option>
+              );
+            })}
+          </select>
+        </div>
+
+        {!selectedTopExcludedDeal && (
+          <div className="text-center py-6 text-gray-400 text-sm">
+            {dealsWithExclusions.length === 0
+              ? 'No deals currently have any excluded SKUs.'
+              : 'Pick a deal above to see its top 5 most important excluded SKUs.'}
+          </div>
+        )}
+
+        {selectedTopExcludedDeal && !hasRankings(selectedTopExcludedDeal.parent) && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm">
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={16} className="text-amber-600 mt-0.5 shrink-0" />
+              <div>
+                <p className="font-semibold text-amber-800">No rankings yet for {selectedTopExcludedDeal.parent}</p>
+                <p className="text-amber-700 mt-1">
+                  To see <em>top</em> excluded SKUs, fill in the ranking for <strong>{selectedTopExcludedDeal.parent}</strong> in
+                  <code className="mx-1 px-1.5 py-0.5 bg-amber-100 rounded font-mono text-xs">src/data/topSkus.js</code>.
+                  Showing the first 5 excluded SKUs by code instead:
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {selectedTopExcludedDeal && topExcludedSkus.length > 0 && (
+          <div className="mt-3 overflow-hidden border border-gray-100 rounded-lg">
+            <table className="w-full">
+              <thead className="bg-gray-50">
+                <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <th className="px-4 py-2.5 w-12">Rank</th>
+                  <th className="px-4 py-2.5">SKU</th>
+                  <th className="px-4 py-2.5">Variant</th>
+                  <th className="px-4 py-2.5">Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topExcludedSkus.map((s, i) => {
+                  const rank = getSkuRank(selectedTopExcludedDeal.parent, s.sku);
+                  return (
+                    <tr key={s.sku} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
+                      <td className="px-4 py-2.5 font-bold text-amber-600">
+                        {rank === Infinity ? '—' : `#${rank}`}
+                      </td>
+                      <td className="px-4 py-2.5 font-mono text-sm font-semibold">{s.sku}</td>
+                      <td className="px-4 py-2.5 text-sm text-gray-600">{s.variant}</td>
+                      <td className="px-4 py-2.5 text-sm">
+                        {s.excludeReason
+                          ? <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-semibold">{s.excludeReason}</span>
+                          : <span className="text-gray-400">—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Excluded SKUs Modal */}
+      {excludedModal && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onClick={() => setExcludedModal(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {excludedModal !== 'list' && (
+                  <button
+                    onClick={() => setExcludedModal('list')}
+                    className="text-gray-400 hover:text-gray-600 cursor-pointer"
+                  >
+                    <ChevronRight size={18} className="rotate-180" />
+                  </button>
+                )}
+                <h2 className="text-lg font-bold text-gray-800">
+                  {excludedModal === 'list'
+                    ? 'Upcoming Deals with Excluded SKUs'
+                    : `Excluded SKUs in ${excludedModal}`}
+                </h2>
+              </div>
               <button
-                key={d.id}
-                onClick={() => navigate(`/deal/${d.id}`)}
-                className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-200 transition-colors cursor-pointer"
+                onClick={() => setExcludedModal(null)}
+                className="text-gray-400 hover:text-gray-600 cursor-pointer"
               >
-                {d.id} - {d.product?.name} ({d.typeName})
+                <X size={20} />
               </button>
-            ))}
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto">
+              {excludedModal === 'list' && (
+                upcomingDealsWithExclusions.length === 0 ? (
+                  <div className="px-6 py-12 text-center text-gray-400">
+                    <p className="text-base">No upcoming deals have excluded SKUs.</p>
+                    <p className="text-sm mt-1">All your scheduled deals are running with full SKU coverage.</p>
+                  </div>
+                ) : (
+                  <table className="w-full">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3">Deal ID</th>
+                        <th className="px-6 py-3">Product</th>
+                        <th className="px-6 py-3">Type</th>
+                        <th className="px-6 py-3">Dates</th>
+                        <th className="px-6 py-3">Excluded</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {upcomingDealsWithExclusions.map((d, i) => {
+                        const excludedCount = d.skus.filter(s => !s.participating).length;
+                        return (
+                          <tr
+                            key={d.id}
+                            onClick={() => setExcludedModal(d.id)}
+                            className={`cursor-pointer hover:bg-blue-50 transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}
+                          >
+                            <td className="px-6 py-3 font-bold text-gray-800">{d.id}</td>
+                            <td className="px-6 py-3">
+                              <span
+                                className="px-2 py-0.5 rounded text-white font-bold text-xs"
+                                style={{ backgroundColor: PRODUCTS[d.parent]?.color }}
+                              >
+                                {d.parent}
+                              </span>
+                            </td>
+                            <td className="px-6 py-3"><DealTypeBadge type={d.type} /></td>
+                            <td className="px-6 py-3 text-sm text-gray-600">
+                              {format(d.startDate, 'MMM d')}
+                              {d.duration > 1 ? ` – ${format(d.endDate, 'MMM d, yyyy')}` : `, ${format(d.startDate, 'yyyy')}`}
+                            </td>
+                            <td className="px-6 py-3">
+                              <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-semibold">
+                                {excludedCount}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )
+              )}
+
+              {excludedModal !== 'list' && (() => {
+                const drillDeal = filtered.find(d => d.id === excludedModal);
+                if (!drillDeal) {
+                  return <div className="px-6 py-12 text-center text-gray-400">Deal not found</div>;
+                }
+                const excludedSkus = drillDeal.skus.filter(s => !s.participating);
+                return (
+                  <div>
+                    <div className="px-6 py-3 bg-gray-50 border-b border-gray-100 text-sm text-gray-600">
+                      <span className="font-semibold text-gray-800">{drillDeal.parent}</span>
+                      {' · '}
+                      {format(drillDeal.startDate, 'MMM d, yyyy')}
+                      {drillDeal.duration > 1 && ` – ${format(drillDeal.endDate, 'MMM d, yyyy')}`}
+                      {' · '}
+                      {drillDeal.typeName}
+                    </div>
+                    <table className="w-full">
+                      <thead className="bg-gray-50 sticky top-0">
+                        <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                          <th className="px-6 py-3">SKU</th>
+                          <th className="px-6 py-3">Variant</th>
+                          <th className="px-6 py-3">Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {excludedSkus.map((s, i) => (
+                          <tr key={s.sku} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
+                            <td className="px-6 py-3 font-mono text-sm font-semibold">{s.sku}</td>
+                            <td className="px-6 py-3 text-sm text-gray-600">{s.variant}</td>
+                            <td className="px-6 py-3 text-sm">
+                              {s.excludeReason
+                                ? <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-semibold">{s.excludeReason}</span>
+                                : <span className="text-gray-400">—</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="px-6 py-3 border-t border-gray-100 text-right">
+                      <button
+                        onClick={() => { setExcludedModal(null); navigate(`/deal/${drillDeal.id}`); }}
+                        className="text-sm text-blue-600 hover:text-blue-800 font-semibold cursor-pointer"
+                      >
+                        Open full deal →
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         </div>
       )}
@@ -338,7 +603,7 @@ export default function Dashboard() {
                   </td>
                   <td className="px-6 py-3.5">
                     <span className="text-sm font-medium text-green-600">{participating}</span>
-                    <span className="text-sm text-gray-400">/{deal.skus.length}</span>
+                    <span className="text-sm text-gray-400">/{getTotalParentSkus(deal.parent)}</span>
                   </td>
                 </tr>
               );
