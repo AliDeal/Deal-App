@@ -1,12 +1,21 @@
-import { useState } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDeals } from '../context/DealContext';
 import { getDealStats, getTotalParentSkus, PRODUCTS, MARKETPLACES } from '../data/deals';
-import { TOP_SKUS, getSkuRank, hasRankings } from '../data/topSkus';
+import {
+  TOP_SKUS,
+  getSkuRankIn,
+  hasRankingsIn,
+  parseTopSkusCsv,
+  loadStoredRankings,
+  saveStoredRankings,
+  clearStoredRankings,
+  TOP_SKUS_CSV_TEMPLATE,
+} from '../data/topSkus';
 import ProductTag from '../components/ProductTag';
 import DealTypeBadge from '../components/DealTypeBadge';
 import { format } from 'date-fns';
-import { Filter, Globe, Calendar, Tag, Package, Search, X, ChevronDown, ChevronRight, AlertTriangle, Trophy } from 'lucide-react';
+import { Filter, Globe, Calendar, Tag, Package, Search, X, ChevronDown, ChevronRight, AlertTriangle, Trophy, Upload, Download, CheckCircle2, RotateCcw } from 'lucide-react';
 
 export default function Dashboard() {
   const { deals } = useDeals();
@@ -24,6 +33,67 @@ export default function Dashboard() {
   const [excludedModal, setExcludedModal] = useState(null);
   // Top Excluded SKUs: which deal the user has selected
   const [topExcludedDealId, setTopExcludedDealId] = useState('');
+  // Top Excluded SKUs: rankings uploaded via CSV (lives in localStorage; null = none)
+  const [uploadedRankings, setUploadedRankings] = useState(() => loadStoredRankings());
+  // Upload feedback: { kind: 'success'|'error'|'warn', text, details? }
+  const [uploadStatus, setUploadStatus] = useState(null);
+  const fileInputRef = useRef(null);
+
+  // The "active" rankings the section uses: uploaded if present, else the static defaults.
+  const activeRankings = uploadedRankings || TOP_SKUS;
+  const uploadedSkuCount = useMemo(() => {
+    if (!uploadedRankings) return 0;
+    return Object.values(uploadedRankings).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0);
+  }, [uploadedRankings]);
+
+  const handleUploadClick = () => fileInputRef.current?.click();
+
+  const handleFileChosen = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const text = evt.target?.result;
+      const { rankings, count, errors } = parseTopSkusCsv(typeof text === 'string' ? text : '');
+      if (count === 0) {
+        setUploadStatus({
+          kind: 'error',
+          text: 'No valid rows found in the CSV.',
+          details: errors.slice(0, 3),
+        });
+      } else {
+        setUploadedRankings(rankings);
+        saveStoredRankings(rankings);
+        setUploadStatus({
+          kind: errors.length > 0 ? 'warn' : 'success',
+          text: `Loaded ${count} SKUs across ${Object.keys(rankings).length} parent products.`,
+          details: errors.length > 0 ? [`${errors.length} row${errors.length > 1 ? 's' : ''} skipped — check format`] : [],
+        });
+      }
+    };
+    reader.onerror = () => setUploadStatus({ kind: 'error', text: 'Could not read the file.' });
+    reader.readAsText(file);
+    // Reset so re-uploading the same filename triggers onChange again
+    e.target.value = '';
+  };
+
+  const handleClearUpload = () => {
+    setUploadedRankings(null);
+    clearStoredRankings();
+    setUploadStatus({ kind: 'success', text: 'Cleared uploaded rankings.' });
+  };
+
+  const handleDownloadTemplate = () => {
+    const blob = new Blob([TOP_SKUS_CSV_TEMPLATE], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'top-skus-template.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   const productEntries = Object.entries(PRODUCTS);
   const filteredProducts = productSearch
@@ -81,7 +151,10 @@ export default function Dashboard() {
   const selectedTopExcludedDeal = dealsWithExclusions.find(d => d.id === topExcludedDealId);
   const topExcludedSkus = selectedTopExcludedDeal
     ? [...selectedTopExcludedDeal.skus.filter(s => !s.participating)]
-        .sort((a, b) => getSkuRank(selectedTopExcludedDeal.parent, a.sku) - getSkuRank(selectedTopExcludedDeal.parent, b.sku))
+        .sort((a, b) =>
+          getSkuRankIn(activeRankings, selectedTopExcludedDeal.parent, a.sku) -
+          getSkuRankIn(activeRankings, selectedTopExcludedDeal.parent, b.sku)
+        )
         .slice(0, 5)
     : [];
 
@@ -322,47 +395,116 @@ export default function Dashboard() {
 
       {/* Top Excluded SKUs Section */}
       <div className="bg-white rounded-xl shadow-sm p-5 mb-6">
+        {/* Hidden file input — triggered by the Upload button */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          onChange={handleFileChosen}
+          className="hidden"
+        />
+
         <div className="flex items-center justify-between gap-4 mb-4 flex-wrap">
           <div className="flex items-center gap-2">
             <Trophy size={18} className="text-amber-500" />
             <h2 className="text-base font-bold text-gray-800">Top Excluded SKUs</h2>
-            <span className="text-xs text-gray-400">Top 5 highest-priority SKUs excluded from a deal</span>
+            <span className="text-xs text-gray-400 hidden sm:inline">Top 5 highest-priority SKUs excluded from a deal</span>
           </div>
-          <select
-            value={topExcludedDealId}
-            onChange={e => setTopExcludedDealId(e.target.value)}
-            className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-300 cursor-pointer min-w-[260px]"
-          >
-            <option value="">Select a deal…</option>
-            {dealsWithExclusions.map(d => {
-              const excludedCount = d.skus.filter(s => !s.participating).length;
-              return (
-                <option key={d.id} value={d.id}>
-                  {d.id} — {d.parent} — {format(d.startDate, 'MMM d, yyyy')} ({excludedCount} excluded)
-                </option>
-              );
-            })}
-          </select>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={handleDownloadTemplate}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+              title="Download a starter CSV you can edit and upload"
+            >
+              <Download size={13} /> Template
+            </button>
+            <button
+              onClick={handleUploadClick}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors cursor-pointer"
+            >
+              <Upload size={13} /> {uploadedRankings ? 'Replace CSV' : 'Upload CSV'}
+            </button>
+            {uploadedRankings && (
+              <button
+                onClick={handleClearUpload}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                title="Clear the uploaded rankings"
+              >
+                <RotateCcw size={13} /> Clear
+              </button>
+            )}
+            <select
+              value={topExcludedDealId}
+              onChange={e => setTopExcludedDealId(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-300 cursor-pointer min-w-[260px]"
+            >
+              <option value="">Select a deal…</option>
+              {dealsWithExclusions.map(d => {
+                const excludedCount = d.skus.filter(s => !s.participating).length;
+                return (
+                  <option key={d.id} value={d.id}>
+                    {d.id} — {d.parent} — {format(d.startDate, 'MMM d, yyyy')} ({excludedCount} excluded)
+                  </option>
+                );
+              })}
+            </select>
+          </div>
         </div>
+
+        {/* Upload status banner */}
+        {uploadStatus && (
+          <div className={`mb-3 px-3 py-2 rounded-lg text-sm flex items-start gap-2 ${
+            uploadStatus.kind === 'success' ? 'bg-green-50 text-green-800 border border-green-200' :
+            uploadStatus.kind === 'warn' ? 'bg-amber-50 text-amber-800 border border-amber-200' :
+            'bg-red-50 text-red-800 border border-red-200'
+          }`}>
+            {uploadStatus.kind === 'success' && <CheckCircle2 size={16} className="mt-0.5 shrink-0" />}
+            {uploadStatus.kind === 'warn' && <AlertTriangle size={16} className="mt-0.5 shrink-0" />}
+            {uploadStatus.kind === 'error' && <X size={16} className="mt-0.5 shrink-0" />}
+            <div className="flex-1">
+              <p className="font-semibold">{uploadStatus.text}</p>
+              {uploadStatus.details && uploadStatus.details.length > 0 && (
+                <ul className="mt-1 text-xs opacity-80 list-disc list-inside">
+                  {uploadStatus.details.map((d, i) => <li key={i}>{d}</li>)}
+                </ul>
+              )}
+            </div>
+            <button onClick={() => setUploadStatus(null)} className="opacity-60 hover:opacity-100 cursor-pointer">
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* Persistence caveat — only show when an upload is loaded */}
+        {uploadedRankings && (
+          <div className="mb-3 text-xs text-gray-500 flex items-center gap-1.5">
+            <CheckCircle2 size={12} className="text-green-500" />
+            <span>
+              {uploadedSkuCount} ranked SKUs loaded from your upload — saved in this browser only.
+              Teammates won't see these until we add a backend.
+            </span>
+          </div>
+        )}
 
         {!selectedTopExcludedDeal && (
           <div className="text-center py-6 text-gray-400 text-sm">
             {dealsWithExclusions.length === 0
               ? 'No deals currently have any excluded SKUs.'
-              : 'Pick a deal above to see its top 5 most important excluded SKUs.'}
+              : uploadedRankings
+                ? 'Pick a deal above to see its top 5 most important excluded SKUs.'
+                : 'Upload a CSV of your ranked SKUs, then pick a deal above.'}
           </div>
         )}
 
-        {selectedTopExcludedDeal && !hasRankings(selectedTopExcludedDeal.parent) && (
+        {selectedTopExcludedDeal && !hasRankingsIn(activeRankings, selectedTopExcludedDeal.parent) && (
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm">
             <div className="flex items-start gap-2">
               <AlertTriangle size={16} className="text-amber-600 mt-0.5 shrink-0" />
               <div>
                 <p className="font-semibold text-amber-800">No rankings yet for {selectedTopExcludedDeal.parent}</p>
                 <p className="text-amber-700 mt-1">
-                  To see <em>top</em> excluded SKUs, fill in the ranking for <strong>{selectedTopExcludedDeal.parent}</strong> in
-                  <code className="mx-1 px-1.5 py-0.5 bg-amber-100 rounded font-mono text-xs">src/data/topSkus.js</code>.
-                  Showing the first 5 excluded SKUs by code instead:
+                  Upload a CSV that includes <strong>{selectedTopExcludedDeal.parent}</strong> rows to rank its SKUs by importance.
+                  Showing the first 5 excluded SKUs by code in the meantime:
                 </p>
               </div>
             </div>
@@ -382,7 +524,7 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {topExcludedSkus.map((s, i) => {
-                  const rank = getSkuRank(selectedTopExcludedDeal.parent, s.sku);
+                  const rank = getSkuRankIn(activeRankings, selectedTopExcludedDeal.parent, s.sku);
                   return (
                     <tr key={s.sku} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
                       <td className="px-4 py-2.5 font-bold text-amber-600">
