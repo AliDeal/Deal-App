@@ -1,25 +1,58 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useDeals } from '../context/DealContext';
-import { useFinancials, calcGrossMargin, calcGrossMarginPct, calcNetMargin, calcNetMarginPct } from '../context/FinancialsContext';
-import { getTotalParentSkus, PRODUCT_SKUS } from '../data/deals';
+import {
+  useFinancials,
+  calcGrossMargin, calcGrossMarginPct, calcNetMargin, calcNetMarginPct, calcReferralFee,
+} from '../context/FinancialsContext';
+import { getTotalParentSkus } from '../data/deals';
 import ProductTag from '../components/ProductTag';
 import DealTypeBadge from '../components/DealTypeBadge';
 import { format } from 'date-fns';
-import { ArrowLeft, Check, X, AlertTriangle, MessageSquare, Send, Trash2, ArrowRightLeft } from 'lucide-react';
+import { ArrowLeft, Check, X, AlertTriangle, MessageSquare, Send, Trash2, ArrowRightLeft, Pencil, Clock } from 'lucide-react';
 import { useState, useMemo } from 'react';
+
+// localStorage key for per-deal manual deal-price overrides:
+//   { [dealId]: { [skuCode]: priceNumber } }
+const MANUAL_OVERRIDES_KEY = 'dealapp.manualDealPrices.v1';
+
+function loadManualOverrides() {
+  try {
+    const s = localStorage.getItem(MANUAL_OVERRIDES_KEY);
+    return s ? JSON.parse(s) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveManualOverrides(map) {
+  try {
+    localStorage.setItem(MANUAL_OVERRIDES_KEY, JSON.stringify(map));
+  } catch {
+    // ignore
+  }
+}
 
 export default function DealDetail() {
   const { dealId } = useParams();
   const navigate = useNavigate();
-  const { deals, excludeSku, includeSku, updateSkuStatus, addComment, deleteComment } = useDeals();
-  const { financials, getSkuFinancials } = useFinancials();
+  const { deals, excludeSku, includeSku, addComment, deleteComment } = useDeals();
+  const { findSku, getDefaultDealPrice } = useFinancials();
   const deal = deals.find(d => d.id === dealId);
   const [excludeModal, setExcludeModal] = useState(null);
   const [reason, setReason] = useState('');
   const [commentText, setCommentText] = useState('');
   const [commentAuthor, setCommentAuthor] = useState('');
-  // Deal price overrides per SKU (local state, keyed by sku id)
-  const [dealPrices, setDealPrices] = useState({});
+  // Per-deal manual deal-price overrides, persisted to localStorage so they
+  // survive page refresh. Shape: { [skuCode]: priceNumber }
+  const [dealPrices, setDealPrices] = useState(() => {
+    const all = loadManualOverrides();
+    return all[dealId] || {};
+  });
+  // Which SKU row is currently in edit mode (one at a time)
+  const [editingSku, setEditingSku] = useState(null);
+  const [editingValue, setEditingValue] = useState('');
+  // Price history modal: null = closed, skuCode = open showing that SKU's history
+  const [historyModalSku, setHistoryModalSku] = useState(null);
 
   // Load deal dashboard data from localStorage (uploaded in Deal Financials)
   const dealDashboardData = useMemo(() => {
@@ -106,8 +139,37 @@ export default function DealDetail() {
     }
   };
 
-  const setDealPrice = (sku, value) => {
-    setDealPrices(prev => ({ ...prev, [sku]: value }));
+  // Save a manual override for a SKU's deal price (persists to localStorage)
+  const setDealPrice = (skuCode, value) => {
+    const num = value === '' ? null : parseFloat(value);
+    setDealPrices(prev => {
+      const next = { ...prev };
+      if (num === null || isNaN(num) || num <= 0) {
+        delete next[skuCode];
+      } else {
+        next[skuCode] = num;
+      }
+      const all = loadManualOverrides();
+      all[dealId] = next;
+      saveManualOverrides(all);
+      return next;
+    });
+  };
+
+  const startEditingPrice = (skuCode, currentValue) => {
+    setEditingSku(skuCode);
+    setEditingValue(currentValue != null ? String(currentValue) : '');
+  };
+  const commitEditingPrice = () => {
+    if (editingSku) {
+      setDealPrice(editingSku, editingValue);
+    }
+    setEditingSku(null);
+    setEditingValue('');
+  };
+  const cancelEditingPrice = () => {
+    setEditingSku(null);
+    setEditingValue('');
   };
 
   const EXCLUDE_REASONS = [
@@ -119,13 +181,11 @@ export default function DealDetail() {
     'Other',
   ];
 
-  // Build enriched SKU data by merging financials + deal dashboard data
+  // Build enriched SKU data by merging financials + deal dashboard data.
+  // Financials are looked up via FinancialsContext (sku code first, ASIN fallback).
+  // Deal price comes from a precedence chain: manual override → upload → seeded default.
   const enrichSku = (sku) => {
-    // Get product financials by SKU name first, then by ASIN
-    let fin = getSkuFinancials(sku.sku);
-    if (!fin) fin = financials.find(f => f.asin === sku.asin);
-    if (!fin) fin = financials.find(f => f.tag === deal.parent && sku.sku.toLowerCase().includes(f.sku?.toLowerCase()?.split('-').slice(-1)[0] || '___'));
-    // Find matching deal dashboard entry by ASIN
+    const fin = findSku(sku.sku, sku.asin);
     const dashEntry = dealDashboardForDeal.find(d => d.asin === sku.asin);
 
     if (!fin && !dashEntry) return { ...sku, hasFinancials: false };
@@ -133,20 +193,14 @@ export default function DealDetail() {
     const normalPrice = fin?.normalPrice || null;
     const cogs = fin?.cogs || 0;
     const fbaFee = fin?.fbaFee || 0;
-    const referralFee = fin?.referralFee || 0;
     const tacosPct = fin?.tacosPct || 0;
 
-    // Deal price priority: manual override > Deal Financials upload > seeded SKU data.
-    // The seeded fallback comes from PRODUCT_SKUS[parent], looked up by sku name or ASIN
-    // (asin lookup matters when an upload reshapes the SKU object via effectiveSkus).
-    const manualPriceStr = dealPrices[sku.sku];
-    const manualPrice = manualPriceStr ? parseFloat(manualPriceStr) : null;
+    // Deal price precedence: manual override → upload → seeded default
+    const manualPrice = typeof dealPrices[sku.sku] === 'number' ? dealPrices[sku.sku] : null;
     const dashDealPrice = dashEntry?.dealPrice || null;
-    const seedSku = (PRODUCT_SKUS[deal.parent] || []).find(s => s.sku === sku.sku || s.asin === sku.asin);
-    const seededDealPrice = seedSku?.dealPrice || null;
+    const seededDealPrice = getDefaultDealPrice(sku.sku) ?? getDefaultDealPrice(sku.asin);
     const dealPrice = manualPrice || dashDealPrice || seededDealPrice;
     const hasDealPrice = dealPrice && !isNaN(dealPrice) && dealPrice > 0;
-    // Track which source the price came from so we can hint it in the UI
     const dealPriceSource = manualPrice ? 'manual' : dashDealPrice ? 'upload' : seededDealPrice ? 'default' : null;
 
     // Reference price from deal dashboard
@@ -156,17 +210,13 @@ export default function DealDetail() {
     const strReflecting = referencePrice && normalPrice ? referencePrice > normalPrice : null;
     const strPct = referencePrice && normalPrice ? ((referencePrice - normalPrice) / normalPrice) * 100 : null;
 
-    // Discount vs actual price
+    // Discount vs actual / STR
     const discountVsActual = normalPrice && dealPrice ? ((normalPrice - dealPrice) / normalPrice) * 100 : null;
-
-    // Discount vs STR
     const discountVsSTR = referencePrice && dealPrice ? ((referencePrice - dealPrice) / referencePrice) * 100 : null;
 
     // Dashboard participation status
     const dashParticipating = dashEntry ? dashEntry.participating : null;
     const dashExclusionReason = dashEntry ? dashEntry.exclusionReason : '';
-
-    const finObj = fin || { normalPrice: normalPrice, cogs, fbaFee, referralFee, tacosPct };
 
     return {
       ...sku,
@@ -175,14 +225,17 @@ export default function DealDetail() {
       normalPrice,
       cogs,
       fbaFee,
-      referralFee,
+      // Referral fee shown in the BASE columns is computed at normal price.
+      // The deal-margin columns recompute it at the deal price internally.
+      referralFee: fin ? calcReferralFee(fin, normalPrice) : 0,
+      referralRate: fin?.referralRate ?? 0.15,
       tacosPct,
-      // Normal margins
+      // Normal margins (at normal price — referral computed dynamically inside)
       grossMargin: fin ? calcGrossMargin(fin) : null,
       grossMarginPct: fin ? calcGrossMarginPct(fin) : null,
       netMargin: fin ? calcNetMargin(fin) : null,
       netMarginPct: fin ? calcNetMarginPct(fin) : null,
-      // Deal data from dashboard
+      // Deal data
       dealPrice: hasDealPrice ? dealPrice : null,
       dealPriceSource,
       referencePrice,
@@ -192,7 +245,9 @@ export default function DealDetail() {
       discountVsSTR,
       dashParticipating,
       dashExclusionReason,
-      // Deal margins (using deal price)
+      // Deal-price-based referral fee (this is the one that uses the lower price)
+      dealReferralFee: hasDealPrice && fin ? calcReferralFee(fin, dealPrice) : null,
+      // Deal margins (referral recomputed at deal price inside calc functions)
       dealGrossMargin: hasDealPrice && fin ? calcGrossMargin(fin, dealPrice) : null,
       dealGrossMarginPct: hasDealPrice && fin ? calcGrossMarginPct(fin, dealPrice) : null,
       dealNetMargin: hasDealPrice && fin ? calcNetMargin(fin, dealPrice) : null,
@@ -302,7 +357,9 @@ export default function DealDetail() {
                         <td className="px-3 py-3 text-sm font-semibold text-gray-800">${sku.normalPrice.toFixed(2)}</td>
                         <td className="px-3 py-3 text-sm text-gray-600">${sku.cogs.toFixed(2)}</td>
                         <td className="px-3 py-3 text-sm text-gray-600">${sku.fbaFee.toFixed(2)}</td>
-                        <td className="px-3 py-3 text-sm text-gray-600">${sku.referralFee.toFixed(2)}</td>
+                        <td className="px-3 py-3 text-sm text-gray-600" title={`${((sku.referralRate ?? 0.15) * 100).toFixed(0)}% × normal price`}>
+                          ${sku.referralFee.toFixed(2)}
+                        </td>
                         <td className="px-3 py-3">
                           <div className="flex flex-col">
                             <span className={`text-sm font-bold ${marginColor(sku.grossMarginPct)}`}>
@@ -313,29 +370,60 @@ export default function DealDetail() {
                             </span>
                           </div>
                         </td>
-                        {/* Deal Price - auto from dashboard / seeded default / manual input */}
+                        {/* Deal Price — click pencil to edit, click clock for history */}
                         <td className="px-3 py-3 bg-blue-50/30">
-                          {sku.dealPrice ? (
-                            <div className="flex flex-col">
-                              <span className="text-sm font-semibold text-blue-700">${sku.dealPrice.toFixed(2)}</span>
-                              {sku.dealPriceSource === 'default' && (
-                                <span className="text-[10px] text-gray-400 italic" title="From seeded SKU defaults — upload Deal Financials to use real values">default</span>
-                              )}
-                              {sku.dealPriceSource === 'upload' && (
-                                <span className="text-[10px] text-blue-500 italic" title="From your Deal Financials upload">from upload</span>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="relative">
+                          {editingSku === sku.sku ? (
+                            <div className="relative flex items-center gap-1">
                               <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
                               <input
                                 type="number" step="0.01"
-                                placeholder={sku.normalPrice?.toFixed(2) || '—'}
-                                value={dealPrices[sku.sku] || ''}
-                                onChange={e => setDealPrice(sku.sku, e.target.value)}
-                                className="w-24 pl-5 pr-2 py-1 border border-blue-200 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white"
+                                autoFocus
+                                value={editingValue}
+                                onChange={e => setEditingValue(e.target.value)}
+                                onBlur={commitEditingPrice}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') commitEditingPrice();
+                                  if (e.key === 'Escape') cancelEditingPrice();
+                                }}
+                                className="w-24 pl-5 pr-2 py-1 border border-blue-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white"
                               />
                             </div>
+                          ) : sku.dealPrice ? (
+                            <div className="group flex items-center gap-1.5">
+                              <div className="flex flex-col">
+                                <span className="text-sm font-semibold text-blue-700">${sku.dealPrice.toFixed(2)}</span>
+                                {sku.dealPriceSource === 'default' && (
+                                  <span className="text-[10px] text-gray-400 italic" title="From seeded SKU defaults — upload Deal Financials to use real values">default</span>
+                                )}
+                                {sku.dealPriceSource === 'upload' && (
+                                  <span className="text-[10px] text-blue-500 italic" title="From your Deal Financials upload">from upload</span>
+                                )}
+                                {sku.dealPriceSource === 'manual' && (
+                                  <span className="text-[10px] text-amber-600 italic" title="Your manual override (saved in this browser)">manual</span>
+                                )}
+                              </div>
+                              <button
+                                onClick={() => startEditingPrice(sku.sku, sku.dealPrice)}
+                                className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-blue-600 transition-opacity cursor-pointer p-0.5"
+                                title="Edit deal price"
+                              >
+                                <Pencil size={11} />
+                              </button>
+                              <button
+                                onClick={() => setHistoryModalSku(sku.sku)}
+                                className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-blue-600 transition-opacity cursor-pointer p-0.5"
+                                title="View price history"
+                              >
+                                <Clock size={11} />
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => startEditingPrice(sku.sku, '')}
+                              className="text-xs text-blue-500 hover:underline cursor-pointer"
+                            >
+                              + add price
+                            </button>
                           )}
                         </td>
                         {/* Discount vs Actual Price */}
@@ -443,13 +531,13 @@ export default function DealDetail() {
             <strong>Deal NM</strong> = Deal GM - (Deal Price &times; TACOS%) &nbsp;|&nbsp;
             <strong>STR</strong> = Ref Price {'>'} Normal Price
           </p>
-          {hasDealDashboard ? (
-            <p className="text-xs text-blue-600 mt-1">Deal prices auto-populated from Deal Financials upload ({dealDashboardForDeal.length} SKUs matched)</p>
-          ) : (
-            <p className="text-xs text-gray-500 mt-1">
-              Deal prices: <strong>upload</strong> (from <a href="#/deal-financials" className="text-blue-600 hover:underline">Deal Financials</a>) → <strong>default</strong> (seeded) → manual entry
-            </p>
-          )}
+          <p className="text-xs text-gray-500 mt-1">
+            <strong>Referral fee = Price × 15%</strong>, recalculated at the deal price for Deal GM/NM.
+            {hasDealDashboard
+              ? <> Deal prices auto-populated from Deal Financials upload ({dealDashboardForDeal.length} SKUs matched).</>
+              : <> Deal prices: <strong>upload</strong> (from <a href="#/deal-financials" className="text-blue-600 hover:underline">Deal Financials</a>) → <strong>default</strong> (seeded) → manual override (pencil icon).</>
+            }
+          </p>
         </div>
       </div>
 
@@ -560,6 +648,101 @@ export default function DealDetail() {
           </div>
         </div>
       </div>
+
+      {/* Price History Modal */}
+      {historyModalSku && (() => {
+        // Find this SKU's matching financials record so we can show variant + ASIN context
+        const skuRow = effectiveSkus.find(s => s.sku === historyModalSku);
+        const fin = skuRow ? findSku(skuRow.sku, skuRow.asin) : null;
+        const asinForLookup = skuRow?.asin;
+        // History pulls from ALL uploaded deal-dashboard records, not just this deal
+        const history = dealDashboardData
+          .filter(d => d.asin === asinForLookup && d.dealPrice && d.dealPrice > 0)
+          .sort((a, b) => new Date(b.date) - new Date(a.date));
+        // Group by dealId+date to dedupe duplicate same-day uploads
+        const byKey = new Map();
+        history.forEach(h => {
+          const key = `${h.dealId || h.dateStr}-${h.dateStr}`;
+          if (!byKey.has(key)) byKey.set(key, h);
+        });
+        const uniqueHistory = Array.from(byKey.values());
+
+        return (
+          <div
+            className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+            onClick={() => setHistoryModalSku(null)}
+          >
+            <div
+              className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Clock size={18} className="text-blue-500" />
+                    <h2 className="text-lg font-bold text-gray-800">Deal Price History</h2>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    <span className="font-mono font-semibold">{historyModalSku}</span>
+                    {skuRow?.variant && <span> · {skuRow.variant}</span>}
+                    {asinForLookup && <span> · {asinForLookup}</span>}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setHistoryModalSku(null)}
+                  className="text-gray-400 hover:text-gray-600 cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                {uniqueHistory.length === 0 ? (
+                  <div className="px-6 py-12 text-center text-gray-400">
+                    <p className="text-base">No deal price history yet.</p>
+                    <p className="text-sm mt-1">
+                      Upload a Deal Financials CSV at <a href="#/deal-financials" className="text-blue-600 hover:underline">/deal-financials</a> to start building history.
+                    </p>
+                    {fin?.defaultDealPrice && (
+                      <p className="text-xs mt-3 text-gray-500">
+                        Seeded default for this SKU: <strong>${fin.defaultDealPrice.toFixed(2)}</strong>
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <table className="w-full">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3">Date</th>
+                        <th className="px-6 py-3">Deal ID</th>
+                        <th className="px-6 py-3">Deal Price</th>
+                        <th className="px-6 py-3">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {uniqueHistory.map((h, i) => (
+                        <tr key={`${h.dealId}-${h.dateStr}-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
+                          <td className="px-6 py-3 text-sm text-gray-700">{format(new Date(h.date), 'MMM d, yyyy')}</td>
+                          <td className="px-6 py-3 text-sm font-bold text-gray-800">{h.dealId || '—'}</td>
+                          <td className="px-6 py-3 text-sm font-semibold text-blue-700">${h.dealPrice.toFixed(2)}</td>
+                          <td className="px-6 py-3">
+                            {h.participating ? (
+                              <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-semibold">Active</span>
+                            ) : (
+                              <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-semibold" title={h.exclusionReason || ''}>
+                                Excluded
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Exclude Modal */}
       {excludeModal && (

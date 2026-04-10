@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { Bot, X, Send, Sparkles } from 'lucide-react';
 import { useDeals } from '../context/DealContext';
-import { PRODUCTS, DEAL_TYPES, calcMargin, calcMarginPct } from '../data/deals';
+import { useFinancials, calcGrossMargin, calcGrossMarginPct } from '../context/FinancialsContext';
+import { PRODUCTS, DEAL_TYPES } from '../data/deals';
 import { format } from 'date-fns';
 
-function generateResponse(query, deals) {
+function generateResponse(query, deals, findSku, getDefaultDealPrice) {
   const q = query.toLowerCase();
 
   // Active / current deals
@@ -58,7 +59,12 @@ function generateResponse(query, deals) {
   if (q.includes('margin') || q.includes('profit')) {
     const margins = [];
     deals.forEach(d => d.skus.filter(s => s.participating).forEach(s => {
-      margins.push({ sku: s.sku, margin: calcMargin(s), pct: calcMarginPct(s), deal: d.id });
+      const fin = findSku(s.sku, s.asin);
+      if (!fin) return;
+      const dealPrice = getDefaultDealPrice(s.sku) ?? getDefaultDealPrice(s.asin) ?? fin.normalPrice;
+      const margin = calcGrossMargin(fin, dealPrice);
+      const pct = calcGrossMarginPct(fin, dealPrice);
+      margins.push({ sku: s.sku, margin, pct, deal: d.id });
     }));
     const negative = margins.filter(m => m.margin < 0);
     const low = margins.filter(m => m.pct >= 0 && m.pct < 15);
@@ -100,6 +106,7 @@ export default function AiAssistant() {
     { role: 'assistant', text: 'Hi! I\'m your Deal Assistant. Ask me anything about your deals, products, margins, or SKUs.' },
   ]);
   const { deals } = useDeals();
+  const { findSku, getDefaultDealPrice } = useFinancials();
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -119,7 +126,7 @@ export default function AiAssistant() {
 
     // Simulate brief typing delay
     setTimeout(() => {
-      const response = generateResponse(userMsg, deals);
+      const response = generateResponse(userMsg, deals, findSku, getDefaultDealPrice);
       setMessages(prev => [...prev, { role: 'assistant', text: response }]);
     }, 400);
   };

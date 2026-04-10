@@ -18,59 +18,50 @@ export const DEAL_TYPES = {
   'Best Deal': { name: 'Best Deal', color: '#3498db' },
 };
 
-// SKUs per product with cost structure for margin calculation
-// Margin = Deal Price - COGS - FBA Fee - Referral Fee - PPC Spend
+// SKUs per parent product — IDENTITY ONLY (sku, asin, variant).
+// Cost structure (cogs, fbaFee, referralRate, tacosPct, normalPrice, defaultDealPrice)
+// lives in FinancialsContext, which is the single source of truth for financials.
+// Margin calculations are in FinancialsContext: calcGrossMargin / calcNetMargin.
 export const PRODUCT_SKUS = {
   B4: [
-    { sku: 'B4-WHT-Q', variant: 'White - Queen', asin: 'B0XXXXXX01', dealPrice: 34.99, cogs: 8.50, fbaFee: 5.80, referralFee: 5.25, ppcSpend: 3.20 },
-    { sku: 'B4-WHT-K', variant: 'White - King', asin: 'B0XXXXXX02', dealPrice: 39.99, cogs: 9.80, fbaFee: 6.40, referralFee: 6.00, ppcSpend: 3.50 },
-    { sku: 'B4-GRY-Q', variant: 'Grey - Queen', asin: 'B0XXXXXX03', dealPrice: 34.99, cogs: 8.50, fbaFee: 5.80, referralFee: 5.25, ppcSpend: 2.90 },
-    { sku: 'B4-GRY-K', variant: 'Grey - King', asin: 'B0XXXXXX04', dealPrice: 39.99, cogs: 9.80, fbaFee: 6.40, referralFee: 6.00, ppcSpend: 3.10 },
-    { sku: 'B4-NVY-Q', variant: 'Navy - Queen', asin: 'B0XXXXXX05', dealPrice: 34.99, cogs: 8.50, fbaFee: 5.80, referralFee: 5.25, ppcSpend: 3.40 },
-    { sku: 'B4-NVY-K', variant: 'Navy - King', asin: 'B0XXXXXX06', dealPrice: 39.99, cogs: 9.80, fbaFee: 6.40, referralFee: 6.00, ppcSpend: 3.80 },
-    { sku: 'B4-BEG-Q', variant: 'Beige - Queen', asin: 'B0XXXXXX07', dealPrice: 34.99, cogs: 8.50, fbaFee: 5.80, referralFee: 5.25, ppcSpend: 2.70 },
-    { sku: 'B4-BEG-K', variant: 'Beige - King', asin: 'B0XXXXXX08', dealPrice: 39.99, cogs: 9.80, fbaFee: 6.40, referralFee: 6.00, ppcSpend: 3.00 },
+    { sku: 'B4-WHT-Q', variant: 'White - Queen', asin: 'B0XXXXXX01' },
+    { sku: 'B4-WHT-K', variant: 'White - King',  asin: 'B0XXXXXX02' },
+    { sku: 'B4-GRY-Q', variant: 'Grey - Queen',  asin: 'B0XXXXXX03' },
+    { sku: 'B4-GRY-K', variant: 'Grey - King',   asin: 'B0XXXXXX04' },
+    { sku: 'B4-NVY-Q', variant: 'Navy - Queen',  asin: 'B0XXXXXX05' },
+    { sku: 'B4-NVY-K', variant: 'Navy - King',   asin: 'B0XXXXXX06' },
+    { sku: 'B4-BEG-Q', variant: 'Beige - Queen', asin: 'B0XXXXXX07' },
+    { sku: 'B4-BEG-K', variant: 'Beige - King',  asin: 'B0XXXXXX08' },
   ],
   B6: [
-    { sku: 'B6-WHT-Q', variant: 'White - Queen', asin: 'B0YYYYYY01', dealPrice: 44.99, cogs: 11.20, fbaFee: 6.80, referralFee: 6.75, ppcSpend: 4.10 },
-    { sku: 'B6-WHT-K', variant: 'White - King', asin: 'B0YYYYYY02', dealPrice: 49.99, cogs: 12.50, fbaFee: 7.40, referralFee: 7.50, ppcSpend: 4.50 },
-    { sku: 'B6-GRY-Q', variant: 'Grey - Queen', asin: 'B0YYYYYY03', dealPrice: 44.99, cogs: 11.20, fbaFee: 6.80, referralFee: 6.75, ppcSpend: 3.80 },
-    { sku: 'B6-GRY-K', variant: 'Grey - King', asin: 'B0YYYYYY04', dealPrice: 49.99, cogs: 12.50, fbaFee: 7.40, referralFee: 7.50, ppcSpend: 4.20 },
-    { sku: 'B6-NVY-Q', variant: 'Navy - Queen', asin: 'B0YYYYYY05', dealPrice: 44.99, cogs: 11.20, fbaFee: 6.80, referralFee: 6.75, ppcSpend: 4.30 },
-    { sku: 'B6-NVY-K', variant: 'Navy - King', asin: 'B0YYYYYY06', dealPrice: 49.99, cogs: 12.50, fbaFee: 7.40, referralFee: 7.50, ppcSpend: 4.60 },
+    { sku: 'B6-WHT-Q', variant: 'White - Queen', asin: 'B0YYYYYY01' },
+    { sku: 'B6-WHT-K', variant: 'White - King',  asin: 'B0YYYYYY02' },
+    { sku: 'B6-GRY-Q', variant: 'Grey - Queen',  asin: 'B0YYYYYY03' },
+    { sku: 'B6-GRY-K', variant: 'Grey - King',   asin: 'B0YYYYYY04' },
+    { sku: 'B6-NVY-Q', variant: 'Navy - Queen',  asin: 'B0YYYYYY05' },
+    { sku: 'B6-NVY-K', variant: 'Navy - King',   asin: 'B0YYYYYY06' },
   ],
   S4: [
-    { sku: 'S4-WHT-Q', variant: 'White - Queen', asin: 'B0ZZZZZZ01', dealPrice: 29.99, cogs: 6.80, fbaFee: 5.20, referralFee: 4.50, ppcSpend: 2.80 },
-    { sku: 'S4-WHT-K', variant: 'White - King', asin: 'B0ZZZZZZ02', dealPrice: 34.99, cogs: 7.90, fbaFee: 5.80, referralFee: 5.25, ppcSpend: 3.10 },
-    { sku: 'S4-BLK-Q', variant: 'Black - Queen', asin: 'B0ZZZZZZ03', dealPrice: 29.99, cogs: 6.80, fbaFee: 5.20, referralFee: 4.50, ppcSpend: 2.60 },
-    { sku: 'S4-BLK-K', variant: 'Black - King', asin: 'B0ZZZZZZ04', dealPrice: 34.99, cogs: 7.90, fbaFee: 5.80, referralFee: 5.25, ppcSpend: 2.90 },
-    { sku: 'S4-PNK-Q', variant: 'Pink - Queen', asin: 'B0ZZZZZZ05', dealPrice: 29.99, cogs: 6.80, fbaFee: 5.20, referralFee: 4.50, ppcSpend: 3.00 },
-    { sku: 'S4-PNK-K', variant: 'Pink - King', asin: 'B0ZZZZZZ06', dealPrice: 34.99, cogs: 7.90, fbaFee: 5.80, referralFee: 5.25, ppcSpend: 3.30 },
+    { sku: 'S4-WHT-Q', variant: 'White - Queen', asin: 'B0ZZZZZZ01' },
+    { sku: 'S4-WHT-K', variant: 'White - King',  asin: 'B0ZZZZZZ02' },
+    { sku: 'S4-BLK-Q', variant: 'Black - Queen', asin: 'B0ZZZZZZ03' },
+    { sku: 'S4-BLK-K', variant: 'Black - King',  asin: 'B0ZZZZZZ04' },
+    { sku: 'S4-PNK-Q', variant: 'Pink - Queen',  asin: 'B0ZZZZZZ05' },
+    { sku: 'S4-PNK-K', variant: 'Pink - King',   asin: 'B0ZZZZZZ06' },
   ],
   S6: [
-    { sku: 'S6-WHT-Q', variant: 'White - Queen', asin: 'B0AAAAAA01', dealPrice: 39.99, cogs: 9.50, fbaFee: 6.20, referralFee: 6.00, ppcSpend: 3.60 },
-    { sku: 'S6-WHT-K', variant: 'White - King', asin: 'B0AAAAAA02', dealPrice: 44.99, cogs: 10.80, fbaFee: 6.80, referralFee: 6.75, ppcSpend: 4.00 },
-    { sku: 'S6-BLK-Q', variant: 'Black - Queen', asin: 'B0AAAAAA03', dealPrice: 39.99, cogs: 9.50, fbaFee: 6.20, referralFee: 6.00, ppcSpend: 3.40 },
-    { sku: 'S6-BLK-K', variant: 'Black - King', asin: 'B0AAAAAA04', dealPrice: 44.99, cogs: 10.80, fbaFee: 6.80, referralFee: 6.75, ppcSpend: 3.80 },
+    { sku: 'S6-WHT-Q', variant: 'White - Queen', asin: 'B0AAAAAA01' },
+    { sku: 'S6-WHT-K', variant: 'White - King',  asin: 'B0AAAAAA02' },
+    { sku: 'S6-BLK-Q', variant: 'Black - Queen', asin: 'B0AAAAAA03' },
+    { sku: 'S6-BLK-K', variant: 'Black - King',  asin: 'B0AAAAAA04' },
   ],
   SS4: [
-    { sku: 'SS4-WHT-Q', variant: 'White - Queen', asin: 'B0BBBBBB01', dealPrice: 32.99, cogs: 7.50, fbaFee: 5.50, referralFee: 4.95, ppcSpend: 3.00 },
-    { sku: 'SS4-WHT-K', variant: 'White - King', asin: 'B0BBBBBB02', dealPrice: 37.99, cogs: 8.80, fbaFee: 6.10, referralFee: 5.70, ppcSpend: 3.30 },
-    { sku: 'SS4-GRY-Q', variant: 'Grey - Queen', asin: 'B0BBBBBB03', dealPrice: 32.99, cogs: 7.50, fbaFee: 5.50, referralFee: 4.95, ppcSpend: 2.80 },
-    { sku: 'SS4-GRY-K', variant: 'Grey - King', asin: 'B0BBBBBB04', dealPrice: 37.99, cogs: 8.80, fbaFee: 6.10, referralFee: 5.70, ppcSpend: 3.10 },
+    { sku: 'SS4-WHT-Q', variant: 'White - Queen', asin: 'B0BBBBBB01' },
+    { sku: 'SS4-WHT-K', variant: 'White - King',  asin: 'B0BBBBBB02' },
+    { sku: 'SS4-GRY-Q', variant: 'Grey - Queen',  asin: 'B0BBBBBB03' },
+    { sku: 'SS4-GRY-K', variant: 'Grey - King',   asin: 'B0BBBBBB04' },
   ],
 };
-
-// Calculate margin: Deal Price - COGS - FBA Fee - Referral Fee - PPC Spend
-export function calcMargin(sku) {
-  const margin = sku.dealPrice - sku.cogs - sku.fbaFee - sku.referralFee - sku.ppcSpend;
-  return margin;
-}
-
-export function calcMarginPct(sku) {
-  if (!sku.dealPrice) return 0;
-  return (calcMargin(sku) / sku.dealPrice) * 100;
-}
 
 function parseDate(str) {
   const months = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };

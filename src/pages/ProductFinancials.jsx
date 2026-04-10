@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo } from 'react';
 import { PRODUCTS } from '../data/deals';
 import {
-  useFinancials, calcGrossMargin, calcGrossMarginPct, calcNetMargin, calcNetMarginPct,
+  useFinancials, calcGrossMargin, calcGrossMarginPct, calcNetMargin, calcNetMarginPct, calcReferralFee,
 } from '../context/FinancialsContext';
 import { Upload, Download, RotateCcw, Package, AlertCircle, CheckCircle2, Search, X } from 'lucide-react';
 
@@ -88,34 +88,65 @@ export default function ProductFinancials() {
           if (['normalprice', 'price', 'listprice', 'regularprice'].includes(h)) colMap.normalPrice = i;
           if (['cogs', 'cost', 'costofgoods'].includes(h)) colMap.cogs = i;
           if (['fbafee', 'fba', 'fulfillment', 'fulfillmentfee'].includes(h)) colMap.fbaFee = i;
-          if (['referralfee', 'referral', 'commission'].includes(h)) colMap.referralFee = i;
+          // Preferred new column: Referral Rate (decimal 0.15 or percentage 15)
+          if (['referralrate', 'referral', 'commission', 'commissionrate'].includes(h)) colMap.referralRate = i;
+          // Legacy column: Referral Fee (we'll convert to rate using normal price)
+          if (['referralfee'].includes(h)) colMap.referralFee = i;
           if (['tacos', 'tacos%', 'tacospct', 'adspend%'].includes(h)) colMap.tacosPct = i;
+          if (['defaultdealprice', 'dealprice', 'seeddealprice'].includes(h)) colMap.defaultDealPrice = i;
         });
 
-        const required = ['tag', 'asin', 'sku', 'normalPrice', 'cogs', 'fbaFee', 'referralFee'];
-        const missing = required.filter(r => colMap[r] === undefined);
+        // Either Referral Rate or legacy Referral Fee must be present
+        const baseRequired = ['tag', 'asin', 'sku', 'normalPrice', 'cogs', 'fbaFee'];
+        const missing = baseRequired.filter(r => colMap[r] === undefined);
+        if (colMap.referralRate === undefined && colMap.referralFee === undefined) {
+          missing.push('referralRate (or referralFee)');
+        }
         if (missing.length > 0) {
           setUploadStatus({
             type: 'error',
-            message: `Missing columns: ${missing.join(', ')}. Required: Tag, ASIN, SKU, Normal Price, COGS, FBA Fee, Referral Fee`,
+            message: `Missing columns: ${missing.join(', ')}. Required: Tag, ASIN, SKU, Normal Price, COGS, FBA Fee, Referral Rate (or legacy Referral Fee)`,
           });
           return;
         }
+
+        // Helper: parse a referral rate value that could be a decimal (0.15) or a percent (15)
+        const parseRate = (raw) => {
+          const n = parseFloat(raw);
+          if (isNaN(n)) return null;
+          // Treat values > 1 as percentages, ≤ 1 as decimals
+          return n > 1 ? n / 100 : n;
+        };
 
         const data = [];
         for (let i = 1; i < lines.length; i++) {
           const cols = lines[i].split(',').map(c => c.trim());
           if (cols.length < header.length) continue;
+
+          const normalPrice = parseFloat(cols[colMap.normalPrice]) || 0;
+
+          // Resolve referral rate: prefer the explicit rate column, fall back to fee/price
+          let referralRate = null;
+          if (colMap.referralRate !== undefined) {
+            referralRate = parseRate(cols[colMap.referralRate]);
+          }
+          if ((referralRate === null || isNaN(referralRate)) && colMap.referralFee !== undefined) {
+            const fee = parseFloat(cols[colMap.referralFee]) || 0;
+            referralRate = normalPrice > 0 ? fee / normalPrice : 0.15;
+          }
+          if (referralRate === null || isNaN(referralRate)) referralRate = 0.15;
+
           data.push({
             tag: cols[colMap.tag] || '',
             asin: cols[colMap.asin] || '',
             sku: cols[colMap.sku] || '',
             variant: colMap.variant !== undefined ? cols[colMap.variant] : '',
-            normalPrice: parseFloat(cols[colMap.normalPrice]) || 0,
+            normalPrice,
             cogs: parseFloat(cols[colMap.cogs]) || 0,
             fbaFee: parseFloat(cols[colMap.fbaFee]) || 0,
-            referralFee: parseFloat(cols[colMap.referralFee]) || 0,
+            referralRate,
             tacosPct: colMap.tacosPct !== undefined ? parseFloat(cols[colMap.tacosPct]) || 0 : 0,
+            defaultDealPrice: colMap.defaultDealPrice !== undefined ? (parseFloat(cols[colMap.defaultDealPrice]) || null) : null,
           });
         }
 
@@ -137,8 +168,8 @@ export default function ProductFinancials() {
   };
 
   const handleDownloadTemplate = () => {
-    const header = 'Tag,ASIN,SKU,Normal Price,COGS,FBA Fee,Referral Fee,TACOS%';
-    const sample = 'B4,B0XXXXXX01,B4-WHT-Q,44.99,8.50,5.80,6.75,12.0';
+    const header = 'Tag,ASIN,SKU,Variant,Normal Price,COGS,FBA Fee,Referral Rate,TACOS%,Default Deal Price';
+    const sample = 'B4,B0XXXXXX01,B4-WHT-Q,White - Queen,44.99,8.50,5.80,0.15,12.0,34.99';
     const blob = new Blob([header + '\n' + sample + '\n'], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -149,13 +180,14 @@ export default function ProductFinancials() {
   };
 
   const handleExport = () => {
-    const header = 'Tag,ASIN,SKU,Normal Price,COGS,FBA Fee,Referral Fee,TACOS%,Gross Margin,Gross Margin %,Net Margin,Net Margin %';
+    const header = 'Tag,ASIN,SKU,Variant,Normal Price,COGS,FBA Fee,Referral Rate,Referral Fee,TACOS%,Default Deal Price,Gross Margin,Gross Margin %,Net Margin,Net Margin %';
     const rows = financials.map(f => {
       const gm = calcGrossMargin(f);
       const gmPct = calcGrossMarginPct(f);
       const nm = calcNetMargin(f);
       const nmPct = calcNetMarginPct(f);
-      return `${f.tag},${f.asin},${f.sku},${f.normalPrice},${f.cogs},${f.fbaFee},${f.referralFee},${f.tacosPct},${gm.toFixed(2)},${gmPct.toFixed(1)},${nm.toFixed(2)},${nmPct.toFixed(1)}`;
+      const refFee = calcReferralFee(f);
+      return `${f.tag},${f.asin},${f.sku},${f.variant || ''},${f.normalPrice},${f.cogs},${f.fbaFee},${(f.referralRate ?? 0.15).toFixed(4)},${refFee.toFixed(2)},${f.tacosPct},${f.defaultDealPrice ?? ''},${gm.toFixed(2)},${gmPct.toFixed(1)},${nm.toFixed(2)},${nmPct.toFixed(1)}`;
     });
     const blob = new Blob([header + '\n' + rows.join('\n') + '\n'], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -209,7 +241,10 @@ export default function ProductFinancials() {
           <Upload size={28} className="mx-auto text-gray-300 mb-2" />
           <p className="text-sm font-medium text-gray-600">Click to upload CSV</p>
           <p className="text-xs text-gray-400 mt-1">
-            Required: Tag, ASIN, SKU, Normal Price, COGS, FBA Fee, Referral Fee, TACOS%
+            Required: Tag, ASIN, SKU, Normal Price, COGS, FBA Fee, Referral Rate (decimal 0.15 or percent 15), TACOS%
+          </p>
+          <p className="text-[11px] text-gray-400 mt-0.5">
+            Optional: Variant, Default Deal Price. Legacy "Referral Fee" column still accepted (auto-converted to rate).
           </p>
           <input
             ref={fileRef}
@@ -499,7 +534,10 @@ export default function ProductFinancials() {
                     <td className="px-4 py-3 text-sm font-semibold text-gray-800">${item.normalPrice.toFixed(2)}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">${item.cogs.toFixed(2)}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">${item.fbaFee.toFixed(2)}</td>
-                    <td className="px-4 py-3 text-sm text-gray-600">${item.referralFee.toFixed(2)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-600">
+                      ${calcReferralFee(item).toFixed(2)}
+                      <span className="text-[10px] text-gray-400 ml-1">({((item.referralRate ?? 0.15) * 100).toFixed(0)}%)</span>
+                    </td>
                     <td className="px-4 py-3">
                       <span className={`text-sm font-bold ${gm >= 0 ? 'text-green-600' : 'text-red-500'}`}>
                         ${gm.toFixed(2)}
@@ -544,6 +582,7 @@ export default function ProductFinancials() {
 
         <div className="px-6 py-3 border-t border-gray-100 bg-gray-50">
           <p className="text-xs text-gray-500">
+            <strong>Referral Fee</strong> = Price &times; Referral Rate (default 15%) &nbsp;|&nbsp;
             <strong>Gross Margin</strong> = Price - COGS - FBA - Referral &nbsp;|&nbsp;
             <strong>Net Margin</strong> = Gross Margin - (Price &times; TACOS%)
           </p>
