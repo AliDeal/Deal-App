@@ -21,6 +21,36 @@ const LOOKBACK_OPTIONS = [
   { value: 90, label: 'L90' },
 ];
 
+// Returns true if `date` falls within ANY deal in `deals` for parent product `productKey`.
+// Drives the "exclude deal days" baseline mode from the real deal calendar
+// (DealContext) instead of relying on a synthetic hasDeal flag.
+function isDealDayInCalendar(date, productKey, deals) {
+  const t = date instanceof Date ? date.getTime() : new Date(date).getTime();
+  for (const d of deals) {
+    if (d.parent !== productKey) continue;
+    if (t >= d.startDate.getTime() && t <= d.endDate.getTime()) return true;
+  }
+  return false;
+}
+
+// Linear regression over (x=index, y=value) → returns slope + intercept.
+// Used to draw a trend line over the baseline series.
+function linearRegression(values) {
+  const n = values.length;
+  if (n < 2) return { slope: 0, intercept: values[0] || 0 };
+  let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+  for (let i = 0; i < n; i++) {
+    sumX += i;
+    sumY += values[i];
+    sumXY += i * values[i];
+    sumXX += i * i;
+  }
+  const denom = n * sumXX - sumX * sumX;
+  const slope = denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
+  const intercept = (sumY - slope * sumX) / n;
+  return { slope, intercept };
+}
+
 // Load custom multipliers from localStorage, falling back to defaults
 function loadMultipliers() {
   try {
@@ -120,6 +150,10 @@ export default function CurrentDealPerformance() {
   const [viewLevel, setViewLevel] = useState('parent'); // 'parent' | 'sku'
   const [selectedSku, setSelectedSku] = useState('');
   const [lookback, setLookback] = useState(30);
+  // 'all' = average across every day in the lookback window
+  // 'exclude-deals' = exclude any day that falls inside a historical deal (per the deal calendar)
+  // 'exclude-deals' is the default because it gives a cleaner "pure baseline velocity"
+  const [baselineMode, setBaselineMode] = useState('exclude-deals');
   const [startDate, setStartDate] = useState('2026-04-08');
   const [tableView, setTableView] = useState('sku'); // 'parent' | 'sku'
   const [keywordSearch, setKeywordSearch] = useState('');
@@ -154,13 +188,21 @@ export default function CurrentDealPerformance() {
       )
     : [];
 
-  // Calculate baseline avg from lookback (non-deal days only)
-  const baselineData = lookbackData.filter(d => !d.hasDeal);
+  // Calculate baseline avg from lookback.
+  // baselineMode === 'exclude-deals' → drop any day that lands inside a historical
+  // deal for this product (per the real deal calendar from DealContext).
+  // baselineMode === 'all' → use every day in the lookback window as-is.
+  const baselineData = baselineMode === 'exclude-deals'
+    ? lookbackData.filter(d => !isDealDayInCalendar(d.date, product, deals))
+    : lookbackData;
   const baselineAvg = baselineData.length > 0
     ? baselineData.reduce((s, d) => s + d.units, 0) / baselineData.length
     : 0;
+  // Number of deal days that were excluded — surfaced in the UI so the user
+  // can see how the exclusion changed the sample size.
+  const excludedDealDays = lookbackData.length - baselineData.length;
 
-  // SKU-level baseline averages
+  // SKU-level baseline averages — same exclusion logic as the parent baseline
   const skuBaselines = useMemo(() => {
     const result = {};
     if (baselineData.length === 0) return result;
@@ -177,7 +219,18 @@ export default function CurrentDealPerformance() {
     return result;
   }, [baselineData]);
 
-  // Build chart data: combine lookback + deal period with projected line
+  // Build chart data: combine lookback + deal period with projected line.
+  //
+  // The "baseline" per-day value is now DYNAMIC, not a flat average:
+  //   - On non-deal days (per the deal calendar): baseline = actual sales for that day
+  //     (because that day IS the natural baseline — the line traces real history)
+  //   - On deal days (any historical deal in lookback OR the current deal):
+  //     baseline = the running baselineAvg (or skuBase) so the line shows what
+  //     we WOULD have done absent the deal. The actual line continues to show
+  //     the deal-day spike, so the gap visually represents the uplift.
+  //
+  // A second "baselineTrend" series is a linear regression over the baseline
+  // values, drawn as a smooth straight line over the period.
   const chartData = useMemo(() => {
     if (!currentDeal) return [];
 
@@ -185,41 +238,51 @@ export default function CurrentDealPerformance() {
     const chartEnd = currentDeal.endDate < refDate ? currentDeal.endDate : refDate;
     const allDays = rawDaily.filter(d => d.date >= lookbackStart && d.date <= chartEnd);
 
-    if (viewLevel === 'sku' && selectedSku) {
-      const skuBase = skuBaselines[selectedSku]?.avg || 0;
-      const mult = getMultiplier(selectedSku, product, currentDeal?.type);
+    const isSkuView = viewLevel === 'sku' && selectedSku;
+    const skuBase = isSkuView ? (skuBaselines[selectedSku]?.avg || 0) : 0;
+    const parentMult = getMultiplier(isSkuView ? selectedSku : '', product, currentDeal?.type);
+    const baseValue = isSkuView ? skuBase : baselineAvg;
 
-      return allDays.map(d => {
-        const skuData = d.skuBreakdown.find(sk => sk.sku === selectedSku);
-        const actual = skuData?.units || 0;
-        const isDealDay = d.hasDeal && d.dealId === currentDeal?.id;
-        const projected = isDealDay ? Math.round(skuBase * mult) : null;
-        return {
-          dateLabel: d.dateLabel,
-          date: d.date,
-          actual,
-          projected,
-          baseline: Math.round(skuBase),
-          isDealDay,
-        };
-      });
-    }
+    // First pass: build rows with the dynamic baseline value per day
+    const rows = allDays.map(d => {
+      const isHistoricalDealDay = isDealDayInCalendar(d.date, product, deals);
+      const isCurrentDealDay = d.date >= currentDeal.startDate && d.date <= currentDeal.endDate;
+      const actual = isSkuView
+        ? (d.skuBreakdown.find(sk => sk.sku === selectedSku)?.units || 0)
+        : d.units;
 
-    // Parent level — use average of SKU multipliers
-    const parentMult = getMultiplier('', product, currentDeal?.type);
-    return allDays.map(d => {
-      const isDealDay = d.hasDeal && d.dealId === currentDeal?.id;
-      const projected = isDealDay ? Math.round(baselineAvg * parentMult) : null;
+      // Per-day baseline:
+      //   non-deal day → trace the actual historical sales (the line wiggles like the actual line)
+      //   deal day → fall back to the lookback average (the line stays flat at "what we would have done")
+      const baseline = (isHistoricalDealDay || isCurrentDealDay)
+        ? Math.round(baseValue)
+        : actual;
+
+      // Projection: only drawn during the CURRENT deal period
+      const projected = isCurrentDealDay ? Math.round(baseValue * parentMult) : null;
+
       return {
         dateLabel: d.dateLabel,
         date: d.date,
-        actual: d.units,
+        actual,
         projected,
-        baseline: Math.round(baselineAvg),
-        isDealDay,
+        baseline,
+        isDealDay: isCurrentDealDay,
+        isHistoricalDealDay,
       };
     });
-  }, [rawDaily, lookbackStart, refDate, currentDeal, viewLevel, selectedSku, baselineAvg, skuBaselines, product]);
+
+    // Second pass: linear-regression trend line over the baseline values
+    if (rows.length > 1) {
+      const baselineValues = rows.map(r => r.baseline);
+      const { slope, intercept } = linearRegression(baselineValues);
+      rows.forEach((r, i) => {
+        r.baselineTrend = Math.round(intercept + slope * i);
+      });
+    }
+
+    return rows;
+  }, [rawDaily, lookbackStart, refDate, currentDeal, viewLevel, selectedSku, baselineAvg, skuBaselines, product, deals]);
 
   // Deal region for chart highlight
   const dealChartRegion = currentDeal ? {
@@ -302,9 +365,15 @@ export default function CurrentDealPerformance() {
             Projected: <span className="font-bold text-purple-600">{data.projected}</span>
           </p>
         )}
-        <p className="text-gray-500 text-xs">Baseline avg: {data.baseline}</p>
+        <p className="text-gray-500 text-xs">
+          Baseline: {data.baseline}
+          {data.baselineTrend !== undefined && <> · Trend: {data.baselineTrend}</>}
+        </p>
         {data.isDealDay && (
-          <p className="text-xs font-semibold text-brand-orange mt-1">Deal Active</p>
+          <p className="text-xs font-semibold text-brand-orange mt-1">Current Deal Active</p>
+        )}
+        {!data.isDealDay && data.isHistoricalDealDay && (
+          <p className="text-xs font-semibold text-amber-600 mt-1">Historical Deal Day</p>
         )}
       </div>
     );
@@ -361,7 +430,7 @@ export default function CurrentDealPerformance() {
 
       {/* Filters */}
       <div className="bg-white rounded-xl shadow-sm p-5 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
           {/* Product */}
           <div>
             <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
@@ -457,6 +526,38 @@ export default function CurrentDealPerformance() {
             </div>
           </div>
 
+          {/* Baseline mode: include vs exclude historical deal days */}
+          <div>
+            <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+              <TrendingUp size={13} /> Baseline Mode
+            </label>
+            <div className="flex gap-1.5">
+              <button
+                onClick={() => setBaselineMode('all')}
+                className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer ${
+                  baselineMode === 'all' ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+                title="Average across every day in the lookback window, including historical deal days"
+              >
+                All days
+              </button>
+              <button
+                onClick={() => setBaselineMode('exclude-deals')}
+                className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer ${
+                  baselineMode === 'exclude-deals' ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+                title="Exclude any day that falls within a historical deal — gives a pure baseline velocity"
+              >
+                Excl. deal days
+              </button>
+            </div>
+            {baselineMode === 'exclude-deals' && excludedDealDays > 0 && (
+              <p className="text-[10px] text-gray-400 mt-1">
+                {excludedDealDays} of {lookbackData.length} day{lookbackData.length === 1 ? '' : 's'} excluded
+              </p>
+            )}
+          </div>
+
           {/* Reference Date */}
           <div>
             <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
@@ -542,7 +643,7 @@ export default function CurrentDealPerformance() {
                 : `${prod.name} — Actual vs Projected`
               }
             </h2>
-            <div className="flex items-center gap-4 text-xs text-gray-500">
+            <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
               <span className="flex items-center gap-1.5">
                 <span className="w-3 h-0.5 rounded" style={{ backgroundColor: prod.color }} />
                 Actual
@@ -552,8 +653,12 @@ export default function CurrentDealPerformance() {
                 Projected
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="w-3 h-0.5 rounded bg-gray-300 border-dashed" />
+                <span className="w-3 border-t border-dashed border-gray-400" />
                 L{lookback} Baseline
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-3 h-0.5 rounded bg-slate-400 opacity-60" />
+                Trend
               </span>
               <span className="flex items-center gap-1.5">
                 <span className="w-3 h-3 rounded bg-orange-100" />
@@ -586,12 +691,28 @@ export default function CurrentDealPerformance() {
                 />
               )}
 
-              {/* Baseline reference line */}
-              <ReferenceLine
-                y={chartData[0]?.baseline || 0}
-                stroke="#d1d5db"
-                strokeDasharray="6 4"
-                label={{ value: `L${lookback} avg: ${chartData[0]?.baseline}`, position: 'right', fontSize: 10, fill: '#9ca3af' }}
+              {/* Baseline line — dynamic, traces actual historical sales on
+                  non-deal days and falls back to the average on deal days */}
+              <Line
+                type="monotone"
+                dataKey="baseline"
+                stroke="#9ca3af"
+                strokeWidth={1.5}
+                dot={false}
+                strokeDasharray="3 3"
+                isAnimationActive={false}
+              />
+
+              {/* Baseline trend line — linear regression over the baseline series */}
+              <Line
+                type="linear"
+                dataKey="baselineTrend"
+                stroke="#94a3b8"
+                strokeWidth={1.25}
+                dot={false}
+                strokeDasharray="0"
+                isAnimationActive={false}
+                opacity={0.6}
               />
 
               {/* Projected line (only during deal) */}
@@ -791,7 +912,10 @@ export default function CurrentDealPerformance() {
 
           <div className="px-6 py-3 border-t border-gray-100 bg-gray-50">
             <p className="text-xs text-gray-500">
-              <strong>L{lookback} Avg</strong> = Avg daily units for {lookback} non-deal days before deal start &nbsp;|&nbsp;
+              <strong>L{lookback} Avg</strong> = Avg daily units for {lookback} days before deal start
+              {baselineMode === 'exclude-deals' && <> (<em>excluding historical deal days</em>)</>}
+              {baselineMode === 'all' && <> (<em>including historical deal days</em>)</>}
+              &nbsp;|&nbsp;
               <strong>Expected</strong> = L{lookback} Avg &times; Multiplier &nbsp;|&nbsp;
               <strong>vs Projected</strong> = (Actual - Projected) / Projected &nbsp;|&nbsp;
               <strong>vs Baseline</strong> = (Actual Avg - L{lookback} Avg) / L{lookback} Avg

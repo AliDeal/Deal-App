@@ -19,6 +19,13 @@ const BASE_DAILY_UNITS = {
   SS4: { min: 5, max: 12 },
 };
 
+// Sample average prices used ONLY for synthetic revenue numbers in this
+// generator. Real prices live in FinancialsContext / Deal Financials uploads.
+// This map exists because PRODUCT_SKUS no longer carries dealPrice fields.
+const SAMPLE_AVG_PRICE = {
+  B4: 35, B6: 47, S4: 32, S6: 42, SS4: 35,
+};
+
 // Deal uplift multipliers (used for generating sample data)
 const DEAL_UPLIFT = {
   LD: { min: 2.0, max: 3.5 },   // Lightning deals: 2-3.5x spike
@@ -106,10 +113,11 @@ export function generateSalesData() {
       }
 
       // Distribute units across SKUs proportionally with variance
+      const samplePrice = SAMPLE_AVG_PRICE[productKey] || 30;
       const skuBreakdown = skus.map((sku, idx) => {
         const skuShare = (1 / skus.length) + (rand() - 0.5) * 0.15;
         const skuUnits = Math.max(1, Math.round(totalUnits * skuShare));
-        const skuRevenue = skuUnits * sku.dealPrice;
+        const skuRevenue = skuUnits * samplePrice;
         return {
           sku: sku.sku,
           variant: sku.variant,
